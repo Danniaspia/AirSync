@@ -75,7 +75,7 @@ object AppState {
         }
 
     fun log(msg: String) {
-        Log.i("AirSync", msg)
+        Log.i("AirTooth", msg)
         synchronized(lines) {
             lines.addLast("${timeFormat.format(Date())}  $msg")
             while (lines.size > 300) lines.removeFirst()

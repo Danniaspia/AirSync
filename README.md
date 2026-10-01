@@ -1,4 +1,4 @@
-# AirSync
+# AirTooth
 
 Android-app, der sender telefonens lyd (fx YouTube i browseren) via AirPlay 1 til flere højttalere på én gang,
 så de spiller i takt med hinanden.
@@ -11,11 +11,11 @@ så de spiller i takt med hinanden.
 
 ## Byg
 Bygges automatisk af GitHub Actions ved hvert push (`.github/workflows/build.yml`).
-APK'en ligger under **Releases** (`AirSync.apk`).
+APK'en ligger under **Releases** (`AirTooth.apk`).
 
 ## Brug
-1. Installér `AirSync.apk` på telefonen (tillad "Installér ukendte apps" for browseren/Mine filer).
-2. Åbn AirSync, vælg højttalerne, tryk **Start**.
+1. Installér `AirTooth.apk` på telefonen (tillad "Installér ukendte apps" for browseren/Mine filer).
+2. Åbn AirTooth, vælg højttalerne, tryk **Start**.
 3. Vælg **Hele skærmen** i Android-dialogen og tryk *Start*.
 4. Gå til browseren og spil musik.
 

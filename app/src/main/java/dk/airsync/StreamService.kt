@@ -248,7 +248,7 @@ class StreamService : Service() {
     private fun acquireLocks() {
         try {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "AirSync:wifi").apply {
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "AirTooth:wifi").apply {
                 setReferenceCounted(false)
                 acquire()
             }
@@ -256,7 +256,7 @@ class StreamService : Service() {
         }
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AirSync:stream").apply {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AirTooth:stream").apply {
                 setReferenceCounted(false)
                 acquire()
             }
@@ -289,7 +289,7 @@ class StreamService : Service() {
             this, 1, Intent(this, StreamService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE
         )
         return Notification.Builder(this, CHANNEL)
-            .setContentTitle("AirSync streamer")
+            .setContentTitle("AirTooth spiller")
             .setContentText(AppState.selected.joinToString { it.name })
             .setSmallIcon(R.drawable.ic_airsync)
             .setColor(getColor(R.color.copper))

@@ -57,6 +57,16 @@ class Discovery(context: Context, private val onChange: (List<Speaker>) -> Unit)
         listener = null
     }
 
+    /** Søger forfra, fx når WiFi lige er blevet tændt – en søgning startet uden WiFi finder ingenting. */
+    fun restart() {
+        stop()
+        found.clear()
+        queue.clear()
+        resolving = false
+        publish()
+        start()
+    }
+
     @Suppress("DEPRECATION")
     private fun next() {
         if (resolving) return

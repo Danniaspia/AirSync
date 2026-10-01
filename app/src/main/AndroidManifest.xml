@@ -15,8 +15,8 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="AirSync"
-        android:theme="@style/AirSync">
+        android:label="AirTooth"
+        android:theme="@style/AirTooth">
 
         <activity
             android:name=".MainActivity"

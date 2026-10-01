@@ -32,16 +32,16 @@ jobs:
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Omdøb APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk AirSync.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk AirTooth.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AirSync-apk
-          path: AirSync.apk
+          name: AirTooth-apk
+          path: AirTooth.apk
 
       - name: Udgiv som release (nem download på telefonen)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: AirSync build ${{ github.run_number }}
-          files: AirSync.apk
+          name: AirTooth build ${{ github.run_number }}
+          files: AirTooth.apk

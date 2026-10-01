@@ -9,8 +9,14 @@ import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -27,6 +33,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_CAPTURE = 1
         private const val REQ_PERMISSIONS = 2
+        private const val REQ_WIFI = 3
         private const val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
 
@@ -61,6 +68,13 @@ class MainActivity : Activity() {
     private lateinit var playIcon: ImageView
     private lateinit var playCaption: TextView
     private var dialogLog: TextView? = null
+    private lateinit var wifiCard: LinearLayout
+    private lateinit var wifiTitle: TextView
+    private lateinit var wifiButton: TextView
+    private var wifiPanelOpen = false
+    private var wifiConnected = true
+    private var needRediscover = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,8 +94,11 @@ class MainActivity : Activity() {
         }
         discovery.start()
         AppState.listener = { refresh() }
+        watchWifi()
         renderSpeakers()
         refresh()
+        // Er WiFi slukket, kommer Androids WiFi-panel frem med det samme – kun én gang pr. åbning.
+        if (savedInstanceState == null && !isWifiOn()) openWifiPanel()
     }
 
     override fun onPause() {
@@ -94,8 +111,71 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         discovery.stop()
+        networkCallback?.let {
+            try {
+                connectivity.unregisterNetworkCallback(it)
+            } catch (_: Exception) {
+            }
+        }
+        networkCallback = null
         AppState.listener = null
         super.onDestroy()
+    }
+
+    // ---------- WiFi ----------
+
+    private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
+
+    private fun isWifiOn(): Boolean =
+        (applicationContext.getSystemService(WIFI_SERVICE) as WifiManager).isWifiEnabled
+
+    private fun isWifiConnected(): Boolean {
+        val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+    }
+
+    /** Apps må ikke selv tænde WiFi (Android 10+), men gerne vise Androids eget WiFi-panel oven på appen. */
+    private fun openWifiPanel() {
+        try {
+            startActivityForResult(Intent(Settings.Panel.ACTION_WIFI), REQ_WIFI)
+            wifiPanelOpen = true
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+        }
+    }
+
+    /** Når WiFi kommer, lukkes panelet, og der søges forfra efter højttalerne. */
+    private fun watchWifi() {
+        wifiConnected = isWifiConnected()
+        needRediscover = !wifiConnected
+        val request = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                runOnUiThread {
+                    wifiConnected = true
+                    if (wifiPanelOpen) {
+                        finishActivity(REQ_WIFI)
+                        wifiPanelOpen = false
+                    }
+                    if (needRediscover) {
+                        needRediscover = false
+                        AppState.log("WiFi forbundet – søger efter højttalere")
+                        discovery.restart()
+                    }
+                    refresh()
+                }
+            }
+
+            override fun onLost(network: Network) {
+                runOnUiThread {
+                    wifiConnected = isWifiConnected()
+                    if (!wifiConnected) needRediscover = true
+                    refresh()
+                }
+            }
+        }
+        connectivity.registerNetworkCallback(request, cb)
+        networkCallback = cb
     }
 
     // ---------- Små byggeklodser ----------
@@ -164,7 +244,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(iconTile(R.drawable.ic_airsync, 32, COPPER, BG, 20))
-        header.addView(text("AirSync", 22f, TEXT, bold = true).apply { setPadding(dp(10), 0, 0, 0) },
+        header.addView(text("AirTooth", 22f, TEXT, bold = true).apply { setPadding(dp(10), 0, 0, 0) },
             LinearLayout.LayoutParams(0, WRAP, 1f))
         header.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_more)
@@ -186,6 +266,27 @@ class MainActivity : Activity() {
         statusText = text("", 13f, MUTED)
         statusPill.addView(statusText)
         root.addView(statusPill, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(16) })
+
+        // WiFi-kort: vises kun, når telefonen ikke er på WiFi
+        wifiCard = card()
+        val wifiRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val wifiTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        wifiTitle = text("", 15f, TEXT, bold = true)
+        wifiTexts.addView(wifiTitle)
+        wifiTexts.addView(text("Højttalerne findes over WiFi.", 12f, MUTED))
+        wifiRow.addView(wifiTexts, LinearLayout.LayoutParams(0, WRAP, 1f))
+        wifiButton = text("", 14f, BG, bold = true).apply {
+            background = rounded(COPPER, 18)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            isClickable = true
+            setOnClickListener { openWifiPanel() }
+        }
+        wifiRow.addView(wifiButton)
+        wifiCard.addView(wifiRow)
+        root.addView(topMargin(wifiCard, 12))
 
         // Samlet lydstyrke
         val volumeCard = card()
@@ -390,6 +491,15 @@ class MainActivity : Activity() {
         playIcon.setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
         playCaption.text = if (running) "Tryk for at stoppe" else "Tryk for at starte"
         dialogLog?.text = AppState.logText()
+
+        wifiCard.visibility = if (wifiConnected) View.GONE else View.VISIBLE
+        if (isWifiOn()) {
+            wifiTitle.text = "Ikke forbundet til WiFi"
+            wifiButton.text = "Vælg netværk"
+        } else {
+            wifiTitle.text = "WiFi er slukket"
+            wifiButton.text = "Tænd WiFi"
+        }
     }
 
     // ---------- Indstillinger og diagnose ----------
@@ -438,7 +548,7 @@ class MainActivity : Activity() {
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
 
         val version = packageManager.getPackageInfo(packageName, 0).versionName
-        box.addView(topMargin(text("AirSync v$version", 12f, MUTED), 12))
+        box.addView(topMargin(text("AirTooth v$version", 12f, MUTED), 12))
 
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Indstillinger")
@@ -463,7 +573,7 @@ class MainActivity : Activity() {
             return
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "AirSync skal have adgang til lyd for at kunne sende den", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "AirTooth skal have adgang til lyd for at kunne sende den", Toast.LENGTH_LONG).show()
             askPermissions()
             return
         }
@@ -479,6 +589,11 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_WIFI) {
+            wifiPanelOpen = false
+            refresh()
+            return
+        }
         if (requestCode != REQ_CAPTURE) return
         if (resultCode != RESULT_OK || data == null) {
             AppState.log("Adgang til lyden blev afvist.")

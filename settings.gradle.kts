@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "AirSync"
+rootProject.name = "AirTooth"
 include(":app")
