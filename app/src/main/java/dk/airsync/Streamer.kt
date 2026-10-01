@@ -12,7 +12,7 @@ import java.net.InetAddress
 import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.LockSupport
 import kotlin.concurrent.thread
 import kotlin.math.min
@@ -54,7 +54,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
     private var record: AudioRecord? = null
     @Volatile private var underruns = 0
     private val volumeExecutor = Executors.newSingleThreadExecutor()
-    private val pendingVolume = AtomicInteger(-1)
+    private val volumePending = AtomicBoolean(false)
 
     /** Blokerer mens der forbindes. Kør på en baggrundstråd. */
     fun start(): Boolean {
@@ -69,7 +69,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             speakers.map { sp ->
                 thread(name = "connect") {
                     val s = RaopSession(sp, control.localPort, timing.localPort)
-                    if (s.connect(seq0, rtp0, AppState.volumePercent)) {
+                    if (s.connect(seq0, rtp0, AppState.effectiveVolume(sp.id))) {
                         sessions.add(s)
                         if (!running && sessions.remove(s)) s.close()
                     }
@@ -94,16 +94,19 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
         }
     }
 
-    /** Sender kun den seneste værdi, så mange hurtige tryk på lydknapperne ikke hober sig op. */
-    fun setVolume(percent: Int) {
-        if (pendingVolume.getAndSet(percent) != -1) return
+    /**
+     * Sender den aktuelle lydstyrke (samlet × højttalerens eget niveau) til hver højttaler.
+     * Mange hurtige ændringer samles, så kun den seneste sendes.
+     */
+    fun updateVolumes() {
+        if (volumePending.getAndSet(true)) return
         try {
             volumeExecutor.execute {
-                val p = pendingVolume.getAndSet(-1)
-                if (p >= 0) for (s in sessions) s.setVolume(p)
+                volumePending.set(false)
+                for (s in sessions) s.setVolume(AppState.effectiveVolume(s.speaker.id))
             }
         } catch (_: Exception) {
-            pendingVolume.set(-1)
+            volumePending.set(false)
         }
     }
 

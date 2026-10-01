@@ -43,6 +43,7 @@ class RaopSession(
     private val activeRemote = (random.nextInt() and 0x7FFFFFFF).toString()
     private var feedbackSupported = false
     private var lastKeepAlive = 0L
+    @Volatile private var lastVolume = -1
 
     private fun log(msg: String) = AppState.log("${speaker.name}: $msg")
 
@@ -118,10 +119,12 @@ class RaopSession(
     }
 
     fun setVolume(percent: Int) {
+        if (percent == lastVolume) return
         val db = if (percent <= 0) -144.0 else -30.0 + 30.0 * percent / 100.0
         try {
             val body = String.format(Locale.US, "volume: %.6f\r\n", db).toByteArray(Charsets.UTF_8)
             request("SET_PARAMETER", url, body = body, contentType = "text/parameters")
+            lastVolume = percent
         } catch (e: Exception) {
             log("lydstyrke fejlede: ${e.message}")
         }

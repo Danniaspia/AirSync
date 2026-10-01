@@ -29,6 +29,8 @@ class MainActivity : Activity() {
     private lateinit var discovery: Discovery
     private val speakers = ArrayList<Speaker>()
     private val checked = HashSet<String>()
+    private val speakerChecks = ArrayList<CheckBox>()
+    private val prefs by lazy { getSharedPreferences("airsync", MODE_PRIVATE) }
 
     private lateinit var status: TextView
     private lateinit var speakerList: LinearLayout
@@ -90,7 +92,7 @@ class MainActivity : Activity() {
         speakerList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(speakerList)
 
-        root.addView(label("Lydstyrke"))
+        root.addView(label("Samlet lydstyrke (lydknapperne)"))
         volume = SeekBar(this).apply {
             max = 100
             progress = AppState.volumePercent
@@ -149,8 +151,9 @@ class MainActivity : Activity() {
             })
             return
         }
+        speakerChecks.clear()
         for (sp in speakers) {
-            speakerList.addView(CheckBox(this).apply {
+            val box = CheckBox(this).apply {
                 text = "${sp.name}   ${sp.host}"
                 textSize = 16f
                 isChecked = sp.id in checked
@@ -158,9 +161,49 @@ class MainActivity : Activity() {
                 setOnCheckedChangeListener { _, isOn ->
                     if (isOn) checked.add(sp.id) else checked.remove(sp.id)
                 }
-            })
+            }
+            speakerChecks.add(box)
+            speakerList.addView(box)
+            speakerList.addView(levelRow(sp))
         }
     }
+
+    /** Skyder til højttalerens eget niveau. Kan bruges både før og under afspilning. */
+    private fun levelRow(sp: Speaker): LinearLayout {
+        if (!AppState.speakerLevels.containsKey(sp.id)) {
+            AppState.speakerLevels[sp.id] = prefs.getInt(levelKey(sp.id), 100)
+        }
+        val value = TextView(this).apply {
+            text = "${AppState.speakerLevel(sp.id)} %"
+            minWidth = dp(48)
+        }
+        val bar = SeekBar(this).apply {
+            max = 100
+            progress = AppState.speakerLevel(sp.id)
+        }
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                AppState.speakerLevels[sp.id] = progress
+                value.text = "$progress %"
+                AppState.streamer?.updateVolumes()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                prefs.edit().putInt(levelKey(sp.id), seekBar.progress).apply()
+            }
+        })
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(32), 0, 0, dp(8))
+            addView(TextView(this@MainActivity).apply { text = "Niveau" })
+            addView(bar, LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(value)
+        }
+    }
+
+    private fun levelKey(id: String) = "level_$id"
 
     private fun refresh() {
         val running = AppState.running
@@ -173,7 +216,7 @@ class MainActivity : Activity() {
         if (volume.progress != AppState.volumePercent) volume.progress = AppState.volumePercent
         volumeKeysBox.isEnabled = !running
         muteBox.isEnabled = !running
-        for (i in 0 until speakerList.childCount) speakerList.getChildAt(i).isEnabled = !running
+        for (box in speakerChecks) box.isEnabled = !running
         logView.text = AppState.logText()
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
     }

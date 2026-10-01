@@ -6,6 +6,7 @@ import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 data class Speaker(
     val id: String,
@@ -27,7 +28,16 @@ object AppState {
     var listener: (() -> Unit)? = null
 
     @Volatile var selected: List<Speaker> = emptyList()
+    /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
     @Volatile var volumePercent: Int = 60
+
+    /** Hver højttalers eget niveau (0–100 %) i forhold til den samlede lydstyrke. */
+    val speakerLevels = ConcurrentHashMap<String, Int>()
+
+    fun speakerLevel(id: String): Int = speakerLevels[id] ?: 100
+
+    /** Den lydstyrke, en bestemt højttaler faktisk skal have. */
+    fun effectiveVolume(id: String): Int = volumePercent * speakerLevel(id) / 100
 
     /** Telefonens lydknapper styrer kun højttalerne (ikke telefonens egen lydstyrke). */
     @Volatile var volumeKeysControlSpeakers: Boolean = true

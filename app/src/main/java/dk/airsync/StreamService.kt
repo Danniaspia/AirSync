@@ -125,7 +125,7 @@ class StreamService : Service() {
     private fun applyVolume(value: Int) {
         val p = value.coerceIn(0, 100)
         AppState.volumePercent = p
-        streamer?.setVolume(p)
+        streamer?.updateVolumes()
         AppState.notifyChanged()
     }
 
