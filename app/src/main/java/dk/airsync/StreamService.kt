@@ -291,12 +291,13 @@ class StreamService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setContentTitle("AirSync streamer")
             .setContentText(AppState.selected.joinToString { it.name })
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_airsync)
+            .setColor(getColor(R.color.copper))
             .setOngoing(true)
             .setContentIntent(open)
             .addAction(
                 Notification.Action.Builder(
-                    Icon.createWithResource(this, android.R.drawable.ic_media_pause), "Stop", stop
+                    Icon.createWithResource(this, R.drawable.ic_stop), "Stop", stop
                 ).build()
             )
             .build()

@@ -2,18 +2,23 @@ package dk.airsync
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
-import android.widget.Button
-import android.widget.CheckBox
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -24,26 +29,47 @@ class MainActivity : Activity() {
         private const val REQ_PERMISSIONS = 2
         private const val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+
+        // Grafit, kort, kobber og varm hvid.
+        private val BG = 0xFF111113.toInt()
+        private val CARD = 0xFF1C1C20.toInt()
+        private val TILE = 0xFF2A2A2E.toInt()
+        private val TRACK = 0xFF34343A.toInt()
+        private val COPPER = 0xFFD08A4E.toInt()
+        private val TEXT = 0xFFF2EFEA.toInt()
+        private val MUTED = 0xFF8A8A90.toInt()
+        private val PILL_ON = 0xFF2A2118.toInt()
+        private val PILL_ON_TEXT = 0xFFE8B48A.toInt()
     }
 
     private lateinit var discovery: Discovery
     private val speakers = ArrayList<Speaker>()
     private val checked = HashSet<String>()
-    private val speakerChecks = ArrayList<CheckBox>()
+    private val speakerSwitches = ArrayList<Switch>()
+    private val speakerSubtitles = HashMap<String, TextView>()
     private val prefs by lazy { getSharedPreferences("airsync", MODE_PRIVATE) }
 
-    private lateinit var status: TextView
+    private lateinit var statusPill: LinearLayout
+    private lateinit var statusDot: View
+    private lateinit var statusText: TextView
+    private lateinit var volumeNumber: TextView
+    private lateinit var volumeBar: SeekBar
+    private lateinit var volumeHint: TextView
     private lateinit var speakerList: LinearLayout
-    private lateinit var startButton: Button
-    private lateinit var volume: SeekBar
-    private lateinit var volumeKeysBox: CheckBox
-    private lateinit var muteBox: CheckBox
-    private lateinit var logView: TextView
-    private lateinit var logScroll: ScrollView
+    private lateinit var playButton: FrameLayout
+    private lateinit var playIcon: ImageView
+    private lateinit var playCaption: TextView
+    private var dialogLog: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!AppState.running) {
+            AppState.volumePercent = prefs.getInt("volume", AppState.volumePercent)
+            AppState.volumeKeysControlSpeakers = prefs.getBoolean("keys", true)
+            AppState.muteLocalSpeaker = prefs.getBoolean("mute", true)
+        }
         AppState.selected.forEach { checked.add(it.id) }
+        prefs.getStringSet("selected", emptySet())?.let { checked.addAll(it) }
         buildUi()
         askPermissions()
         discovery = Discovery(this) { found ->
@@ -57,130 +83,228 @@ class MainActivity : Activity() {
         refresh()
     }
 
+    override fun onPause() {
+        prefs.edit()
+            .putInt("volume", AppState.volumePercent)
+            .putStringSet("selected", HashSet(checked))
+            .apply()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         discovery.stop()
         AppState.listener = null
         super.onDestroy()
     }
 
+    // ---------- Små byggeklodser ----------
+
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun label(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 13f
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(16), 0, dp(4))
+    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
     }
+
+    private fun oval(color: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(color)
+    }
+
+    private fun text(value: String, sizeSp: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        text = value
+        textSize = sizeSp
+        setTextColor(color)
+        if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+
+    private fun iconTile(icon: Int, sizeDp: Int, bg: Int, tint: Int, iconDp: Int) = FrameLayout(this).apply {
+        background = rounded(bg, sizeDp / 4)
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(tint)
+        }, FrameLayout.LayoutParams(dp(iconDp), dp(iconDp), Gravity.CENTER))
+        layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+    }
+
+    private fun card() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(CARD, 16)
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+    }
+
+    private fun styleSeekBar(bar: SeekBar) {
+        bar.progressTintList = ColorStateList.valueOf(COPPER)
+        bar.progressBackgroundTintList = ColorStateList.valueOf(TRACK)
+        bar.thumbTintList = ColorStateList.valueOf(TEXT)
+        bar.splitTrack = false
+    }
+
+    private fun styleSwitch(sw: Switch) {
+        val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        sw.thumbTintList = ColorStateList(states, intArrayOf(TEXT, MUTED))
+        sw.trackTintList = ColorStateList(states, intArrayOf(COPPER, TRACK))
+    }
+
+    private fun topMargin(view: View, dpValue: Int, width: Int = MATCH) =
+        view.apply { layoutParams = LinearLayout.LayoutParams(width, WRAP).apply { topMargin = dp(dpValue) } }
+
+    // ---------- Skærmen ----------
 
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(32), dp(16), dp(16))
+            setPadding(dp(20), dp(20), dp(20), dp(28))
         }
-        root.addView(TextView(this).apply {
-            text = "AirSync  v" + packageManager.getPackageInfo(packageName, 0).versionName
-            textSize = 26f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        status = TextView(this).apply {
-            textSize = 15f
-            setPadding(0, dp(4), 0, 0)
+
+        // Top: mærke, navn og indstillinger
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        root.addView(status)
+        header.addView(iconTile(R.drawable.ic_airsync, 32, COPPER, BG, 20))
+        header.addView(text("AirSync", 22f, TEXT, bold = true).apply { setPadding(dp(10), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, WRAP, 1f))
+        header.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_more)
+            imageTintList = ColorStateList.valueOf(MUTED)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            contentDescription = "Indstillinger"
+            setOnClickListener { openSettings() }
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        root.addView(header)
 
-        root.addView(label("Højttalere"))
-        speakerList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(speakerList)
+        // Statusfelt
+        statusPill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(6), dp(14), dp(6))
+        }
+        statusDot = View(this)
+        statusPill.addView(statusDot, LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(8) })
+        statusText = text("", 13f, MUTED)
+        statusPill.addView(statusText)
+        root.addView(statusPill, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(16) })
 
-        root.addView(label("Samlet lydstyrke (lydknapperne)"))
-        volume = SeekBar(this).apply {
+        // Samlet lydstyrke
+        val volumeCard = card()
+        val volumeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        volumeRow.addView(text("Samlet lydstyrke", 13f, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
+        volumeNumber = text("", 30f, TEXT, bold = true)
+        volumeRow.addView(volumeNumber)
+        volumeRow.addView(text(" %", 15f, MUTED))
+        volumeCard.addView(volumeRow)
+        volumeBar = SeekBar(this).apply {
             max = 100
             progress = AppState.volumePercent
         }
-        volume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {}
-            override fun onStartTrackingTouch(seekBar: SeekBar) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar) {
+        styleSeekBar(volumeBar)
+        volumeBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                volumeNumber.text = progress.toString()
                 val setter = AppState.volumeSetter
-                if (setter != null) setter(seekBar.progress) else AppState.volumePercent = seekBar.progress
+                if (setter != null) setter(progress) else AppState.volumePercent = progress
             }
-        })
-        root.addView(volume)
-        volumeKeysBox = CheckBox(this).apply {
-            text = "Lydknapperne styrer kun højttalerne"
-            isChecked = AppState.volumeKeysControlSpeakers
-            setOnCheckedChangeListener { _, isOn -> AppState.volumeKeysControlSpeakers = isOn }
-        }
-        root.addView(volumeKeysBox)
-        muteBox = CheckBox(this).apply {
-            text = "Telefonens højttaler er slukket under afspilning"
-            isChecked = AppState.muteLocalSpeaker
-            setOnCheckedChangeListener { _, isOn -> AppState.muteLocalSpeaker = isOn }
-        }
-        root.addView(muteBox)
 
-        startButton = Button(this).apply {
-            textSize = 18f
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+        })
+        volumeCard.addView(topMargin(volumeBar, 10))
+        volumeHint = text("Styres også med telefonens lydknapper", 12f, MUTED)
+        volumeCard.addView(topMargin(volumeHint, 8))
+        root.addView(topMargin(volumeCard, 16))
+
+        // Højttalere
+        root.addView(topMargin(text("Højttalere", 13f, MUTED).apply { setPadding(dp(4), 0, 0, 0) }, 22))
+        speakerList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(speakerList)
+
+        // Start/stop
+        playButton = FrameLayout(this).apply {
+            background = oval(COPPER)
+            isClickable = true
+            contentDescription = "Start eller stop"
             setOnClickListener { onStartStop() }
         }
-        root.addView(startButton, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(16) })
+        playIcon = ImageView(this).apply { imageTintList = ColorStateList.valueOf(BG) }
+        playButton.addView(playIcon, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
+        root.addView(playButton, LinearLayout.LayoutParams(dp(72), dp(72)).apply {
+            topMargin = dp(28)
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
+        playCaption = text("", 13f, MUTED).apply { gravity = Gravity.CENTER }
+        root.addView(topMargin(playCaption, 10))
 
-        root.addView(label("Log"))
-        logView = TextView(this).apply {
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
-            setTextIsSelectable(true)
-        }
-        logScroll = ScrollView(this).apply { addView(logView) }
-        root.addView(logScroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
-        setContentView(root)
-    }
-
-    private fun askPermissions() {
-        val wanted = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
-        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQ_PERMISSIONS)
+        setContentView(ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(BG)
+            addView(root)
+        })
     }
 
     private fun renderSpeakers() {
         speakerList.removeAllViews()
+        speakerSwitches.clear()
+        speakerSubtitles.clear()
         if (speakers.isEmpty()) {
-            speakerList.addView(TextView(this).apply {
-                text = "Søger… (telefonen skal være på samme WiFi som højttalerne)"
-            })
+            val empty = card()
+            empty.addView(text("Søger efter højttalere…", 15f, TEXT, bold = true))
+            empty.addView(topMargin(text("Telefonen skal være på samme WiFi som højttalerne.", 13f, MUTED), 4))
+            speakerList.addView(topMargin(empty, 10))
             return
         }
-        speakerChecks.clear()
-        for (sp in speakers) {
-            val box = CheckBox(this).apply {
-                text = "${sp.name}   ${sp.host}"
-                textSize = 16f
-                isChecked = sp.id in checked
-                isEnabled = !AppState.running
-                setOnCheckedChangeListener { _, isOn ->
-                    if (isOn) checked.add(sp.id) else checked.remove(sp.id)
-                }
-            }
-            speakerChecks.add(box)
-            speakerList.addView(box)
-            speakerList.addView(levelRow(sp))
-        }
+        for (sp in speakers) speakerList.addView(topMargin(speakerCard(sp), 10))
+        refresh()
     }
 
-    /** Skyder til højttalerens eget niveau. Kan bruges både før og under afspilning. */
-    private fun levelRow(sp: Speaker): LinearLayout {
+    private fun speakerCard(sp: Speaker): LinearLayout {
         if (!AppState.speakerLevels.containsKey(sp.id)) {
             AppState.speakerLevels[sp.id] = prefs.getInt(levelKey(sp.id), 100)
         }
-        val value = TextView(this).apply {
-            text = "${AppState.speakerLevel(sp.id)} %"
-            minWidth = dp(48)
+        val c = card()
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(iconTile(R.drawable.ic_speaker, 40, TILE, COPPER, 22))
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, dp(8), 0)
+        }
+        texts.addView(text(sp.name, 16f, TEXT, bold = true))
+        val subtitle = text(sp.host, 12f, MUTED)
+        texts.addView(subtitle)
+        speakerSubtitles[sp.id] = subtitle
+        row.addView(texts, LinearLayout.LayoutParams(0, WRAP, 1f))
+
+        val sw = Switch(this).apply {
+            isChecked = sp.id in checked
+            contentDescription = "Brug ${sp.name}"
+            setOnCheckedChangeListener { _, isOn ->
+                if (isOn) checked.add(sp.id) else checked.remove(sp.id)
+            }
+        }
+        styleSwitch(sw)
+        speakerSwitches.add(sw)
+        row.addView(sw)
+        c.addView(row)
+
+        val levelRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val value = text("${AppState.speakerLevel(sp.id)} %", 12f, MUTED).apply {
+            gravity = Gravity.END
+            minWidth = dp(44)
         }
         val bar = SeekBar(this).apply {
             max = 100
             progress = AppState.speakerLevel(sp.id)
+            contentDescription = "Niveau for ${sp.name}"
         }
+        styleSeekBar(bar)
         bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
@@ -194,31 +318,108 @@ class MainActivity : Activity() {
                 prefs.edit().putInt(levelKey(sp.id), seekBar.progress).apply()
             }
         })
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(32), 0, 0, dp(8))
-            addView(TextView(this@MainActivity).apply { text = "Niveau" })
-            addView(bar, LinearLayout.LayoutParams(0, WRAP, 1f))
-            addView(value)
-        }
+        levelRow.addView(bar, LinearLayout.LayoutParams(0, WRAP, 1f))
+        levelRow.addView(value)
+        c.addView(topMargin(levelRow, 8))
+        return c
     }
 
     private fun levelKey(id: String) = "level_$id"
 
     private fun refresh() {
         val running = AppState.running
-        status.text = if (running) {
-            "Spiller på: " + AppState.selected.joinToString { it.name }
+        val playing = AppState.selected.map { it.id }.toSet()
+
+        if (running) {
+            statusPill.background = rounded(PILL_ON, 14)
+            statusDot.background = oval(COPPER)
+            statusText.setTextColor(PILL_ON_TEXT)
+            val n = AppState.selected.size
+            statusText.text = if (n == 1) "Spiller · 1 højttaler" else "Spiller · $n højttalere i synk"
         } else {
-            "Vælg højttalere og tryk Start"
+            statusPill.background = rounded(CARD, 14)
+            statusDot.background = oval(MUTED)
+            statusText.setTextColor(MUTED)
+            statusText.text = "Klar · vælg højttalere"
         }
-        startButton.text = if (running) "Stop" else "Start"
-        if (volume.progress != AppState.volumePercent) volume.progress = AppState.volumePercent
-        volumeKeysBox.isEnabled = !running
-        muteBox.isEnabled = !running
-        for (box in speakerChecks) box.isEnabled = !running
-        logView.text = AppState.logText()
+
+        volumeNumber.text = AppState.volumePercent.toString()
+        if (volumeBar.progress != AppState.volumePercent) volumeBar.progress = AppState.volumePercent
+        volumeHint.visibility = if (AppState.volumeKeysControlSpeakers) View.VISIBLE else View.GONE
+
+        for (sw in speakerSwitches) sw.isEnabled = !running
+        for (sp in speakers) {
+            speakerSubtitles[sp.id]?.text = if (running && sp.id in playing) "Spiller · ${sp.host}" else sp.host
+        }
+
+        playIcon.setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
+        playCaption.text = if (running) "Tryk for at stoppe" else "Tryk for at starte"
+        dialogLog?.text = AppState.logText()
+    }
+
+    // ---------- Indstillinger og diagnose ----------
+
+    private fun openSettings() {
+        val running = AppState.running
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(8), dp(22), dp(8))
+        }
+
+        fun option(label: String, value: Boolean, onChange: (Boolean) -> Unit) = Switch(this).apply {
+            text = label
+            textSize = 15f
+            setTextColor(TEXT)
+            isChecked = value
+            isEnabled = !running
+            setPadding(0, dp(10), 0, dp(10))
+            styleSwitch(this)
+            setOnCheckedChangeListener { _, isOn -> onChange(isOn) }
+        }
+
+        box.addView(option("Lydknapperne styrer kun højttalerne", AppState.volumeKeysControlSpeakers) {
+            AppState.volumeKeysControlSpeakers = it
+            prefs.edit().putBoolean("keys", it).apply()
+            refresh()
+        })
+        box.addView(option("Telefonens højttaler er slukket under afspilning", AppState.muteLocalSpeaker) {
+            AppState.muteLocalSpeaker = it
+            prefs.edit().putBoolean("mute", it).apply()
+        })
+        if (running) box.addView(text("Kan ændres, når der ikke afspilles.", 12f, MUTED))
+
+        box.addView(topMargin(text("Diagnose", 13f, MUTED), 18))
+        val log = text(AppState.logText(), 11f, MUTED).apply {
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+        }
+        dialogLog = log
+        val logScroll = ScrollView(this).apply {
+            background = rounded(BG, 12)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            addView(log)
+        }
+        box.addView(logScroll, LinearLayout.LayoutParams(MATCH, dp(220)).apply { topMargin = dp(8) })
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+
+        val version = packageManager.getPackageInfo(packageName, 0).versionName
+        box.addView(topMargin(text("AirSync v$version", 12f, MUTED), 12))
+
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Indstillinger")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Luk", null)
+            .setOnDismissListener { dialogLog = null }
+            .show()
+    }
+
+    // ---------- Start og stop ----------
+
+    private fun askPermissions() {
+        val wanted = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
+        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQ_PERMISSIONS)
     }
 
     private fun onStartStop() {
@@ -227,7 +428,7 @@ class MainActivity : Activity() {
             return
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Appen skal have lov til at optage lyd", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "AirSync skal have adgang til lyd for at kunne sende den", Toast.LENGTH_LONG).show()
             askPermissions()
             return
         }

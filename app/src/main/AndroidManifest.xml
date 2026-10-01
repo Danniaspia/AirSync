@@ -13,9 +13,10 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@android:drawable/ic_media_play"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="AirSync"
-        android:theme="@android:style/Theme.DeviceDefault.DayNight">
+        android:theme="@style/AirSync">
 
         <activity
             android:name=".MainActivity"
