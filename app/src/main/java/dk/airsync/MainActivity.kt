@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private lateinit var speakerList: LinearLayout
     private lateinit var startButton: Button
     private lateinit var volume: SeekBar
+    private lateinit var volumeKeysBox: CheckBox
     private lateinit var logView: TextView
     private lateinit var logScroll: ScrollView
 
@@ -97,16 +98,17 @@ class MainActivity : Activity() {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {}
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
             override fun onStopTrackingTouch(seekBar: SeekBar) {
-                AppState.volumePercent = seekBar.progress
-                AppState.streamer?.setVolume(seekBar.progress)
+                val setter = AppState.volumeSetter
+                if (setter != null) setter(seekBar.progress) else AppState.volumePercent = seekBar.progress
             }
         })
         root.addView(volume)
-        root.addView(CheckBox(this).apply {
-            text = "Telefonens lydknapper styrer højttalerne"
-            isChecked = AppState.followPhoneVolume
-            setOnCheckedChangeListener { _, isOn -> AppState.followPhoneVolume = isOn }
-        })
+        volumeKeysBox = CheckBox(this).apply {
+            text = "Lydknapperne styrer kun højttalerne"
+            isChecked = AppState.volumeKeysControlSpeakers
+            setOnCheckedChangeListener { _, isOn -> AppState.volumeKeysControlSpeakers = isOn }
+        }
+        root.addView(volumeKeysBox)
 
         startButton = Button(this).apply {
             textSize = 18f
@@ -162,6 +164,7 @@ class MainActivity : Activity() {
         }
         startButton.text = if (running) "Stop" else "Start"
         if (volume.progress != AppState.volumePercent) volume.progress = AppState.volumePercent
+        volumeKeysBox.isEnabled = !running
         for (i in 0 until speakerList.childCount) speakerList.getChildAt(i).isEnabled = !running
         logView.text = AppState.logText()
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }

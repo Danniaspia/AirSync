@@ -29,8 +29,11 @@ object AppState {
     @Volatile var selected: List<Speaker> = emptyList()
     @Volatile var volumePercent: Int = 60
 
-    /** Telefonens lydstyrkeknapper styrer højttalerne. */
-    @Volatile var followPhoneVolume: Boolean = true
+    /** Telefonens lydknapper styrer kun højttalerne (ikke telefonens egen lydstyrke). */
+    @Volatile var volumeKeysControlSpeakers: Boolean = true
+
+    /** Sat af servicen mens der streames, så skyderen og lydknapperne holdes i takt. */
+    @Volatile var volumeSetter: ((Int) -> Unit)? = null
     @Volatile var streamer: Streamer? = null
 
     @Volatile var running: Boolean = false

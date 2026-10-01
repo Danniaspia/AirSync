@@ -5,19 +5,20 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.media.AudioManager
+import android.media.VolumeProvider
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import kotlin.concurrent.thread
 
@@ -29,14 +30,14 @@ class StreamService : Service() {
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         private const val CHANNEL = "stream"
-
-        // Systemets (skjulte) broadcast, når en lydstyrke ændres.
-        private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
-        private const val EXTRA_VOLUME_STREAM_TYPE = "android.media.EXTRA_VOLUME_STREAM_TYPE"
+        private const val VOLUME_STEP = 5
+        private const val PRIORITY_BUMP_MS = 2_000L
     }
 
+    private val main = Handler(Looper.getMainLooper())
     private var streamer: Streamer? = null
-    private var volumeReceiver: BroadcastReceiver? = null
+    private var mediaSession: MediaSession? = null
+    private var volumeProvider: VolumeProvider? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var stopping = false
@@ -71,7 +72,6 @@ class StreamService : Service() {
             stopStreaming()
             return START_NOT_STICKY
         }
-        val main = Handler(mainLooper)
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 main.post { stopStreaming() }
@@ -79,12 +79,12 @@ class StreamService : Service() {
         }, main)
 
         acquireLocks()
-        if (AppState.followPhoneVolume) AppState.volumePercent = phoneVolumePercent()
         val s = Streamer(projection, AppState.selected)
         streamer = s
         AppState.streamer = s
+        AppState.volumeSetter = { applyVolume(it) }
         AppState.running = true
-        watchPhoneVolume()
+        if (AppState.volumeKeysControlSpeakers) startVolumeSession()
         thread(name = "start") {
             if (!s.start()) main.post { stopStreaming() }
         }
@@ -104,44 +104,72 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         AppState.running = false
-        volumeReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (_: Exception) {
-            }
-        }
-        volumeReceiver = null
+        stopVolumeSession()
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun phoneVolumePercent(): Int {
-        val am = getSystemService(AudioManager::class.java)
-        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        return am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+    /** Sætter højttalernes lydstyrke (0–100) fra knapper, skyder eller lydpanelet. Kaldes på main-tråden. */
+    private fun applyVolume(value: Int) {
+        val p = value.coerceIn(0, 100)
+        AppState.volumePercent = p
+        volumeProvider?.currentVolume = p
+        streamer?.setVolume(p)
+        AppState.notifyChanged()
     }
 
-    /** Telefonens lydknapper virker også med slukket skærm, så længe der spiller lyd. */
-    private fun watchPhoneVolume() {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (!AppState.followPhoneVolume) return
-                if (intent.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, -1) != AudioManager.STREAM_MUSIC) return
-                val percent = phoneVolumePercent()
-                if (percent == AppState.volumePercent) return
-                AppState.volumePercent = percent
-                streamer?.setVolume(percent)
-                AppState.notifyChanged()
+    /**
+     * Melder appen som "afspilning på ekstern enhed" (som Chromecast/Spotify Connect). Så sender Android
+     * telefonens lydknapper hertil i stedet for at ændre telefonens egen lydstyrke – også med slukket skærm.
+     */
+    private fun startVolumeSession() {
+        val provider = object : VolumeProvider(VolumeProvider.VOLUME_CONTROL_ABSOLUTE, 100, AppState.volumePercent) {
+            override fun onAdjustVolume(direction: Int) {
+                when (direction) {
+                    AudioManager.ADJUST_RAISE -> applyVolume(AppState.volumePercent + VOLUME_STEP)
+                    AudioManager.ADJUST_LOWER -> applyVolume(AppState.volumePercent - VOLUME_STEP)
+                }
+            }
+
+            override fun onSetVolumeTo(volume: Int) {
+                applyVolume(volume)
             }
         }
-        val filter = IntentFilter(VOLUME_CHANGED_ACTION)
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(receiver, filter)
+        val s = MediaSession(this, "AirSync")
+        s.setPlaybackToRemote(provider)
+        s.setPlaybackState(playbackState(PlaybackState.STATE_PLAYING))
+        s.isActive = true
+        mediaSession = s
+        volumeProvider = provider
+        main.postDelayed(bumpPriority, PRIORITY_BUMP_MS)
+    }
+
+    /**
+     * Android giver lydknapperne til den session, der senest er gået i gang med at spille. Når browseren
+     * starter en ny video, tager den førstepladsen – derfor melder vi os jævnligt som "startet igen".
+     */
+    private val bumpPriority: Runnable = object : Runnable {
+        override fun run() {
+            val s = mediaSession ?: return
+            s.setPlaybackState(playbackState(PlaybackState.STATE_PAUSED))
+            s.setPlaybackState(playbackState(PlaybackState.STATE_PLAYING))
+            main.postDelayed(this, PRIORITY_BUMP_MS)
         }
-        volumeReceiver = receiver
+    }
+
+    private fun playbackState(state: Int): PlaybackState =
+        PlaybackState.Builder().setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f).build()
+
+    private fun stopVolumeSession() {
+        main.removeCallbacks(bumpPriority)
+        mediaSession?.let {
+            it.isActive = false
+            it.release()
+        }
+        mediaSession = null
+        volumeProvider = null
+        AppState.volumeSetter = null
     }
 
     @Suppress("DEPRECATION")
