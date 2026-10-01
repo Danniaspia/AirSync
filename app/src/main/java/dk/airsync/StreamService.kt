@@ -152,7 +152,9 @@ class StreamService : Service() {
 
         if (volumeKeys) {
             // Udgangspunktet må ikke ligge helt i top eller bund, ellers giver et tryk ingen ændring at opfange.
-            val base = originalVolume.coerceIn(1, (max - 1).coerceAtLeast(1))
+            // Er telefonen lydløs, bruges laveste trin: Android ophæver selv lydløs et øjeblik ved "op",
+            // og så høres det glimt næsten ikke.
+            val base = if (muteLocal) 1 else originalVolume.coerceIn(1, (max - 1).coerceAtLeast(1))
             if (base != originalVolume) am.setStreamVolume(AudioManager.STREAM_MUSIC, base, 0)
             baseVolume = base
             AppState.log("Lydknapper styrer højttalerne")
