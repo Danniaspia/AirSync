@@ -27,7 +27,26 @@ object AppState {
 
     var listener: (() -> Unit)? = null
 
+    /** Højttalerne i afspilningen. Kan ændres, mens der spilles. */
     @Volatile var selected: List<Speaker> = emptyList()
+
+    /** Højttalere, der er ved at forbinde til en afspilning i gang. */
+    val connecting: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    @Synchronized
+    fun addSelected(sp: Speaker) {
+        if (selected.none { it.id == sp.id }) selected = selected + sp
+    }
+
+    @Synchronized
+    fun removeSelected(id: String) {
+        selected = selected.filter { it.id != id }
+    }
+
+    @Synchronized
+    fun keepSelected(ids: Set<String>) {
+        selected = selected.filter { it.id in ids }
+    }
     /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
     @Volatile var volumePercent: Int = 60
 

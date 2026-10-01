@@ -53,6 +53,9 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
     private var timingSocket: DatagramSocket? = null
     private var record: AudioRecord? = null
     @Volatile private var underruns = 0
+    @Volatile private var streaming = false
+    @Volatile private var streamT0 = 0L
+    @Volatile private var nextPacket = 0L
     private val volumeExecutor = Executors.newSingleThreadExecutor()
     private val volumePending = AtomicBoolean(false)
 
@@ -77,6 +80,8 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             }.forEach { it.join() }
 
             if (!running) return false
+            AppState.keepSelected(sessions.map { it.speaker.id }.toSet())
+            AppState.notifyChanged()
             if (sessions.isEmpty()) {
                 AppState.log("Ingen højttalere kunne forbindes.")
                 stop()
@@ -92,6 +97,46 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             stop()
             return false
         }
+    }
+
+    /**
+     * Tager en højttaler med i en afspilning, der allerede kører. Den får de samme pakker og samme ur
+     * som de andre fra den aktuelle position, så den spiller i takt med dem fra første tone.
+     */
+    fun addSpeaker(sp: Speaker): Boolean {
+        val control = controlSocket
+        val timing = timingSocket
+        if (!running || !streaming || control == null || timing == null) return false
+        if (sessions.any { it.speaker.id == sp.id } || !AppState.connecting.add(sp.id)) return true
+        AppState.notifyChanged()
+        thread(name = "add") {
+            // Tabte pakker mellem dette punkt og forbindelsen gensendes fra historikken.
+            val n = nextPacket
+            val seq = ((seq0 + n) and 0xFFFF).toInt()
+            val ts = (rtp0 + n * FRAMES_PER_PACKET) and MASK32
+            val s = RaopSession(sp, control.localPort, timing.localPort)
+            val ok = s.connect(seq, ts, AppState.effectiveVolume(sp.id))
+            if (ok && running && AppState.selected.any { it.id == sp.id }) {
+                sessions.add(s)
+                val next = nextPacket
+                sendSync(dueTime(streamT0, next), (rtp0 + next * FRAMES_PER_PACKET) and MASK32, first = true, only = s)
+                AppState.log("${sp.name} spiller nu med")
+            } else {
+                if (ok) s.close()
+                AppState.removeSelected(sp.id)
+            }
+            AppState.connecting.remove(sp.id)
+            AppState.notifyChanged()
+        }
+        return true
+    }
+
+    /** Fjerner en højttaler fra afspilningen. De andre spiller videre. */
+    fun removeSpeaker(id: String) {
+        val s = sessions.firstOrNull { it.speaker.id == id } ?: return
+        sessions.remove(s)
+        thread(name = "remove") { s.close() }
+        AppState.log("${s.speaker.name} er stoppet")
     }
 
     /**
@@ -185,10 +230,12 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
         val encoder = AlacEncoder()
         val pcm = ByteArray(BYTES_PER_PACKET)
         val t0 = System.nanoTime() + 100_000_000L
+        streamT0 = t0
         var n = 0L
         var buffering = true
         var lastStatus = t0
         sendSync(t0, rtp0, first = true)
+        streaming = true
 
         while (running) {
             val due = dueTime(t0, n)
@@ -218,6 +265,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             history[seq % HISTORY] = packet
             for (s in sessions) send(data, packet, s.address, s.serverPort)
             n++
+            nextPacket = n
 
             if (n % 125 == 0L) {
                 sendSync(dueTime(t0, n), (rtp0 + n * FRAMES_PER_PACKET) and MASK32, first = false)
@@ -243,7 +291,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
     }
 
     /** Fortæller højttalerne: frame [ts] - latency afspilles på NTP-tidspunktet for [dueNanos]. */
-    private fun sendSync(dueNanos: Long, ts: Long, first: Boolean) {
+    private fun sendSync(dueNanos: Long, ts: Long, first: Boolean, only: RaopSession? = null) {
         val control = controlSocket ?: return
         val p = ByteArray(20)
         p[0] = if (first) 0x90.toByte() else 0x80.toByte()
@@ -253,7 +301,11 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
         Bytes.putU32(p, 4, ts - LATENCY_FRAMES)
         Bytes.putU64(p, 8, Clock.ntp(dueNanos))
         Bytes.putU32(p, 16, ts)
-        for (s in sessions) send(control, p, s.address, s.controlPort)
+        if (only != null) {
+            send(control, p, only.address, only.controlPort)
+        } else {
+            for (s in sessions) send(control, p, s.address, s.controlPort)
+        }
     }
 
     private fun send(socket: DatagramSocket, bytes: ByteArray, addr: InetAddress, port: Int) {

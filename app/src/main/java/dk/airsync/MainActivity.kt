@@ -45,7 +45,8 @@ class MainActivity : Activity() {
     private lateinit var discovery: Discovery
     private val speakers = ArrayList<Speaker>()
     private val checked = HashSet<String>()
-    private val speakerSwitches = ArrayList<Switch>()
+    private val speakerSwitches = LinkedHashMap<String, Switch>()
+    private var syncingSwitches = false
     private val speakerSubtitles = HashMap<String, TextView>()
     private val prefs by lazy { getSharedPreferences("airsync", MODE_PRIVATE) }
 
@@ -283,11 +284,13 @@ class MainActivity : Activity() {
             isChecked = sp.id in checked
             contentDescription = "Brug ${sp.name}"
             setOnCheckedChangeListener { _, isOn ->
+                if (syncingSwitches) return@setOnCheckedChangeListener
                 if (isOn) checked.add(sp.id) else checked.remove(sp.id)
+                if (AppState.running) toggleWhilePlaying(sp, isOn)
             }
         }
         styleSwitch(sw)
-        speakerSwitches.add(sw)
+        speakerSwitches[sp.id] = sw
         row.addView(sw)
         c.addView(row)
 
@@ -326,6 +329,25 @@ class MainActivity : Activity() {
 
     private fun levelKey(id: String) = "level_$id"
 
+    /** Tilføjer eller fjerner en højttaler, uden at afspilningen på de andre afbrydes. */
+    private fun toggleWhilePlaying(sp: Speaker, on: Boolean) {
+        val streamer = AppState.streamer ?: return
+        if (on) {
+            AppState.addSelected(sp)
+            if (!streamer.addSpeaker(sp)) {
+                AppState.removeSelected(sp.id)
+                Toast.makeText(this, "Vent et øjeblik, til afspilningen er i gang", Toast.LENGTH_SHORT).show()
+            }
+        } else if (AppState.selected.count { it.id != sp.id } == 0) {
+            // Den sidste højttaler slås fra: så stopper afspilningen.
+            startService(Intent(this, StreamService::class.java).setAction(StreamService.ACTION_STOP))
+        } else {
+            AppState.removeSelected(sp.id)
+            streamer.removeSpeaker(sp.id)
+        }
+        refresh()
+    }
+
     private fun refresh() {
         val running = AppState.running
         val playing = AppState.selected.map { it.id }.toSet()
@@ -347,9 +369,22 @@ class MainActivity : Activity() {
         if (volumeBar.progress != AppState.volumePercent) volumeBar.progress = AppState.volumePercent
         volumeHint.visibility = if (AppState.volumeKeysControlSpeakers) View.VISIBLE else View.GONE
 
-        for (sw in speakerSwitches) sw.isEnabled = !running
+        // Under afspilning viser kontakterne, hvilke højttalere der faktisk spiller med.
+        if (running) {
+            syncingSwitches = true
+            for ((id, sw) in speakerSwitches) {
+                val on = id in playing
+                if (sw.isChecked != on) sw.isChecked = on
+                if (on) checked.add(id) else checked.remove(id)
+            }
+            syncingSwitches = false
+        }
         for (sp in speakers) {
-            speakerSubtitles[sp.id]?.text = if (running && sp.id in playing) "Spiller · ${sp.host}" else sp.host
+            speakerSubtitles[sp.id]?.text = when {
+                running && sp.id in AppState.connecting -> "Forbinder…"
+                running && sp.id in playing -> "Spiller · ${sp.host}"
+                else -> sp.host
+            }
         }
 
         playIcon.setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
