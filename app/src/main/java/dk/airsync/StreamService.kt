@@ -5,13 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.media.AudioManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.PowerManager
@@ -25,9 +29,14 @@ class StreamService : Service() {
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         private const val CHANNEL = "stream"
+
+        // Systemets (skjulte) broadcast, når en lydstyrke ændres.
+        private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
+        private const val EXTRA_VOLUME_STREAM_TYPE = "android.media.EXTRA_VOLUME_STREAM_TYPE"
     }
 
     private var streamer: Streamer? = null
+    private var volumeReceiver: BroadcastReceiver? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var stopping = false
@@ -70,10 +79,12 @@ class StreamService : Service() {
         }, main)
 
         acquireLocks()
+        if (AppState.followPhoneVolume) AppState.volumePercent = phoneVolumePercent()
         val s = Streamer(projection, AppState.selected)
         streamer = s
         AppState.streamer = s
         AppState.running = true
+        watchPhoneVolume()
         thread(name = "start") {
             if (!s.start()) main.post { stopStreaming() }
         }
@@ -93,9 +104,44 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         AppState.running = false
+        volumeReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {
+            }
+        }
+        volumeReceiver = null
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun phoneVolumePercent(): Int {
+        val am = getSystemService(AudioManager::class.java)
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        return am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+    }
+
+    /** Telefonens lydknapper virker også med slukket skærm, så længe der spiller lyd. */
+    private fun watchPhoneVolume() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (!AppState.followPhoneVolume) return
+                if (intent.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, -1) != AudioManager.STREAM_MUSIC) return
+                val percent = phoneVolumePercent()
+                if (percent == AppState.volumePercent) return
+                AppState.volumePercent = percent
+                streamer?.setVolume(percent)
+                AppState.notifyChanged()
+            }
+        }
+        val filter = IntentFilter(VOLUME_CHANGED_ACTION)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+        volumeReceiver = receiver
     }
 
     @Suppress("DEPRECATION")

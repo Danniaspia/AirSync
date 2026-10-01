@@ -28,6 +28,9 @@ object AppState {
 
     @Volatile var selected: List<Speaker> = emptyList()
     @Volatile var volumePercent: Int = 60
+
+    /** Telefonens lydstyrkeknapper styrer højttalerne. */
+    @Volatile var followPhoneVolume: Boolean = true
     @Volatile var streamer: Streamer? = null
 
     @Volatile var running: Boolean = false
@@ -47,7 +50,7 @@ object AppState {
 
     fun logText(): String = synchronized(lines) { lines.joinToString("\n") }
 
-    private fun notifyChanged() {
+    fun notifyChanged() {
         main.post { listener?.invoke() }
     }
 }

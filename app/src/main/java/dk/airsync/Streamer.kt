@@ -11,6 +11,8 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.LockSupport
 import kotlin.concurrent.thread
 import kotlin.math.min
@@ -51,6 +53,8 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
     private var timingSocket: DatagramSocket? = null
     private var record: AudioRecord? = null
     @Volatile private var underruns = 0
+    private val volumeExecutor = Executors.newSingleThreadExecutor()
+    private val pendingVolume = AtomicInteger(-1)
 
     /** Blokerer mens der forbindes. Kør på en baggrundstråd. */
     fun start(): Boolean {
@@ -90,8 +94,17 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
         }
     }
 
+    /** Sender kun den seneste værdi, så mange hurtige tryk på lydknapperne ikke hober sig op. */
     fun setVolume(percent: Int) {
-        thread(name = "volume") { for (s in sessions) s.setVolume(percent) }
+        if (pendingVolume.getAndSet(percent) != -1) return
+        try {
+            volumeExecutor.execute {
+                val p = pendingVolume.getAndSet(-1)
+                if (p >= 0) for (s in sessions) s.setVolume(p)
+            }
+        } catch (_: Exception) {
+            pendingVolume.set(-1)
+        }
     }
 
     fun stop() {
@@ -105,6 +118,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             projection.stop()
         } catch (_: Exception) {
         }
+        volumeExecutor.shutdown()
         val toClose = sessions.toList()
         sessions.clear()
         thread(name = "teardown") {

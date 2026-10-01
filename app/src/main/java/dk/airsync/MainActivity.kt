@@ -33,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var speakerList: LinearLayout
     private lateinit var startButton: Button
+    private lateinit var volume: SeekBar
     private lateinit var logView: TextView
     private lateinit var logScroll: ScrollView
 
@@ -88,7 +89,7 @@ class MainActivity : Activity() {
         root.addView(speakerList)
 
         root.addView(label("Lydstyrke"))
-        val volume = SeekBar(this).apply {
+        volume = SeekBar(this).apply {
             max = 100
             progress = AppState.volumePercent
         }
@@ -101,6 +102,11 @@ class MainActivity : Activity() {
             }
         })
         root.addView(volume)
+        root.addView(CheckBox(this).apply {
+            text = "Telefonens lydknapper styrer højttalerne"
+            isChecked = AppState.followPhoneVolume
+            setOnCheckedChangeListener { _, isOn -> AppState.followPhoneVolume = isOn }
+        })
 
         startButton = Button(this).apply {
             textSize = 18f
@@ -155,6 +161,7 @@ class MainActivity : Activity() {
             "Vælg højttalere og tryk Start"
         }
         startButton.text = if (running) "Stop" else "Start"
+        if (volume.progress != AppState.volumePercent) volume.progress = AppState.volumePercent
         for (i in 0 until speakerList.childCount) speakerList.getChildAt(i).isEnabled = !running
         logView.text = AppState.logText()
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
