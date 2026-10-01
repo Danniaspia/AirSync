@@ -32,6 +32,9 @@ object AppState {
     /** Telefonens lydknapper styrer kun højttalerne (ikke telefonens egen lydstyrke). */
     @Volatile var volumeKeysControlSpeakers: Boolean = true
 
+    /** Telefonens egen højttaler er lydløs, mens der streames – ligesom med Bluetooth. */
+    @Volatile var muteLocalSpeaker: Boolean = true
+
     /** Sat af servicen mens der streames, så skyderen og lydknapperne holdes i takt. */
     @Volatile var volumeSetter: ((Int) -> Unit)? = null
     @Volatile var streamer: Streamer? = null

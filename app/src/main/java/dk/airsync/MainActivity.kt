@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var startButton: Button
     private lateinit var volume: SeekBar
     private lateinit var volumeKeysBox: CheckBox
+    private lateinit var muteBox: CheckBox
     private lateinit var logView: TextView
     private lateinit var logScroll: ScrollView
 
@@ -109,6 +110,12 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _, isOn -> AppState.volumeKeysControlSpeakers = isOn }
         }
         root.addView(volumeKeysBox)
+        muteBox = CheckBox(this).apply {
+            text = "Telefonens højttaler er slukket under afspilning"
+            isChecked = AppState.muteLocalSpeaker
+            setOnCheckedChangeListener { _, isOn -> AppState.muteLocalSpeaker = isOn }
+        }
+        root.addView(muteBox)
 
         startButton = Button(this).apply {
             textSize = 18f
@@ -165,6 +172,7 @@ class MainActivity : Activity() {
         startButton.text = if (running) "Stop" else "Start"
         if (volume.progress != AppState.volumePercent) volume.progress = AppState.volumePercent
         volumeKeysBox.isEnabled = !running
+        muteBox.isEnabled = !running
         for (i in 0 until speakerList.childCount) speakerList.getChildAt(i).isEnabled = !running
         logView.text = AppState.logText()
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }

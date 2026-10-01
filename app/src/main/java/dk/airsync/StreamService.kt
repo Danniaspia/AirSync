@@ -36,6 +36,7 @@ class StreamService : Service() {
         // Systemets (skjulte) broadcast, når en lydstyrke ændres.
         private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
         private const val EXTRA_VOLUME_STREAM_TYPE = "android.media.EXTRA_VOLUME_STREAM_TYPE"
+        private const val EXTRA_VOLUME_STREAM_VALUE = "android.media.EXTRA_VOLUME_STREAM_VALUE"
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -43,6 +44,11 @@ class StreamService : Service() {
     private var volumeReceiver: BroadcastReceiver? = null
     private var baseVolume = 0
     private var audioManager: AudioManager? = null
+    private var muteLocal = false
+    private var volumeKeys = false
+    private var originalVolume = 0
+    private var originalMuted = false
+    private var gotVolumeBroadcast = false
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var stopping = false
@@ -89,11 +95,7 @@ class StreamService : Service() {
         AppState.streamer = s
         AppState.volumeSetter = { applyVolume(it) }
         AppState.running = true
-        if (AppState.volumeKeysControlSpeakers) {
-            startVolumeKeyWatch()
-        } else {
-            AppState.log("Lydknapper styrer telefonen (fluebenet er fjernet)")
-        }
+        startPhoneVolumeControl()
         thread(name = "start") {
             if (!s.start()) main.post { stopStreaming() }
         }
@@ -113,7 +115,7 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         AppState.running = false
-        stopVolumeKeyWatch()
+        stopPhoneVolumeControl()
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -132,20 +134,49 @@ class StreamService : Service() {
      * medielydstyrke ændres, sætter den straks tilbage og bruger ændringen på højttalerne i stedet.
      * Virker også med slukket skærm, så længe der spiller lyd.
      */
-    private fun startVolumeKeyWatch() {
+    /**
+     * Styrer telefonens egen medielyd, mens der streames:
+     *  - [muteLocal]: telefonens højttaler er lydløs (det opfangede signal tages altid med fuld styrke,
+     *    så højttalerne mister ikke lyden).
+     *  - [volumeKeys]: lydknapperne flytter telefonens lydstyrke; vi sætter den straks tilbage og
+     *    bruger ændringen på højttalerne i stedet. Virker også med slukket skærm.
+     */
+    private fun startPhoneVolumeControl() {
         val am = getSystemService(AudioManager::class.java)
         val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        // Udgangspunktet må ikke ligge helt i top eller bund, ellers giver et tryk ingen ændring at opfange.
-        val base = am.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(1, (max - 1).coerceAtLeast(1))
-        if (base != am.getStreamVolume(AudioManager.STREAM_MUSIC)) am.setStreamVolume(AudioManager.STREAM_MUSIC, base, 0)
-        baseVolume = base
-
+        muteLocal = AppState.muteLocalSpeaker
+        volumeKeys = AppState.volumeKeysControlSpeakers
+        originalMuted = am.isStreamMute(AudioManager.STREAM_MUSIC)
+        originalVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         audioManager = am
-        AppState.log("Lydknapper styrer højttalerne (telefonen fastholdes på $base/$max)")
+
+        if (volumeKeys) {
+            // Udgangspunktet må ikke ligge helt i top eller bund, ellers giver et tryk ingen ændring at opfange.
+            val base = originalVolume.coerceIn(1, (max - 1).coerceAtLeast(1))
+            if (base != originalVolume) am.setStreamVolume(AudioManager.STREAM_MUSIC, base, 0)
+            baseVolume = base
+            AppState.log("Lydknapper styrer højttalerne")
+        }
+        if (muteLocal) {
+            muteMusic()
+            AppState.log("Telefonens højttaler er slået fra")
+        }
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (intent.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, -1) == AudioManager.STREAM_MUSIC) checkPhoneVolume()
+                if (intent.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, -1) != AudioManager.STREAM_MUSIC) return
+                if (!gotVolumeBroadcast) {
+                    gotVolumeBroadcast = true
+                    AppState.log("Signal fra lydknapperne modtaget")
+                }
+                // Når telefonen er lydløs, svarer getStreamVolume altid 0 – men broadcasten har det rigtige trin.
+                val index = intent.getIntExtra(EXTRA_VOLUME_STREAM_VALUE, -1)
+                if (muteLocal) {
+                    if (volumeKeys && index >= 0) handlePhoneIndex(index)
+                    if (!am.isStreamMute(AudioManager.STREAM_MUSIC)) muteMusic()
+                } else if (volumeKeys) {
+                    handlePhoneIndex(am.getStreamVolume(AudioManager.STREAM_MUSIC))
+                }
             }
         }
         val filter = IntentFilter(VOLUME_CHANGED_ACTION)
@@ -161,25 +192,38 @@ class StreamService : Service() {
 
     private val volumePoll: Runnable = object : Runnable {
         override fun run() {
-            if (audioManager == null) return
-            checkPhoneVolume()
+            val am = audioManager ?: return
+            if (muteLocal) {
+                // Et tryk på "op" ophæver lydløs. Lydstyrken tælles via broadcasten; her sikrer vi kun lydløs.
+                if (!am.isStreamMute(AudioManager.STREAM_MUSIC)) {
+                    if (volumeKeys && !gotVolumeBroadcast) handlePhoneIndex(am.getStreamVolume(AudioManager.STREAM_MUSIC))
+                    muteMusic()
+                }
+            } else if (volumeKeys) {
+                handlePhoneIndex(am.getStreamVolume(AudioManager.STREAM_MUSIC))
+            }
             main.postDelayed(this, VOLUME_POLL_MS)
         }
     }
 
     /** Har telefonens lydstyrke flyttet sig, sættes den tilbage, og ændringen bruges på højttalerne. */
-    private fun checkPhoneVolume() {
+    private fun handlePhoneIndex(index: Int) {
         val am = audioManager ?: return
-        val steps = am.getStreamVolume(AudioManager.STREAM_MUSIC) - baseVolume
+        val steps = index - baseVolume
         if (steps == 0) return
         am.setStreamVolume(AudioManager.STREAM_MUSIC, baseVolume, 0)
+        if (muteLocal) muteMusic()
         applyVolume(AppState.volumePercent + steps * VOLUME_STEP)
         AppState.log("Lydknap: højttalere ${AppState.volumePercent} %")
     }
 
-    private fun stopVolumeKeyWatch() {
+    private fun muteMusic() {
+        audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+    }
+
+    /** Sætter telefonens medielyd tilbage, som den var før Start. */
+    private fun stopPhoneVolumeControl() {
         main.removeCallbacks(volumePoll)
-        audioManager = null
         volumeReceiver?.let {
             try {
                 unregisterReceiver(it)
@@ -188,6 +232,14 @@ class StreamService : Service() {
         }
         volumeReceiver = null
         AppState.volumeSetter = null
+        val am = audioManager ?: return
+        audioManager = null
+        try {
+            if (volumeKeys && originalVolume > 0) am.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0)
+            val flag = if (originalMuted) AudioManager.ADJUST_MUTE else AudioManager.ADJUST_UNMUTE
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, flag, 0)
+        } catch (_: Exception) {
+        }
     }
 
     @Suppress("DEPRECATION")
