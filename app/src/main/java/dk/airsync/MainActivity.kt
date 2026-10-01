@@ -75,7 +75,7 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(32), dp(16), dp(16))
         }
         root.addView(TextView(this).apply {
-            text = "AirSync"
+            text = "AirSync  v" + packageManager.getPackageInfo(packageName, 0).versionName
             textSize = 26f
             setTypeface(typeface, Typeface.BOLD)
         })
