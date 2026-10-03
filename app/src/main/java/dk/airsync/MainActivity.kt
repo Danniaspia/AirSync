@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -18,6 +19,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -67,6 +69,7 @@ class MainActivity : Activity() {
     private lateinit var playButton: FrameLayout
     private lateinit var playIcon: ImageView
     private lateinit var playCaption: TextView
+    private lateinit var exitButton: TextView
     private var dialogLog: TextView? = null
     private lateinit var wifiCard: LinearLayout
     private lateinit var wifiTitle: TextView
@@ -337,6 +340,17 @@ class MainActivity : Activity() {
         })
         playCaption = text("", 13f, MUTED).apply { gravity = Gravity.CENTER }
         root.addView(topMargin(playCaption, 10))
+        exitButton = text("Afslut", 14f, COPPER, bold = true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            isClickable = true
+            contentDescription = "Afslut AirTooth"
+            setOnClickListener { exitApp() }
+        }
+        root.addView(exitButton, LinearLayout.LayoutParams(WRAP, WRAP).apply {
+            topMargin = dp(6)
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
 
         setContentView(ScrollView(this).apply {
             isFillViewport = true
@@ -459,6 +473,11 @@ class MainActivity : Activity() {
             statusText.setTextColor(PILL_ON_TEXT)
             val n = AppState.selected.size
             statusText.text = if (n == 1) "Spiller · 1 højttaler" else "Spiller · $n højttalere i synk"
+        } else if (AppState.standby) {
+            statusPill.background = rounded(CARD, 14)
+            statusDot.background = oval(COPPER)
+            statusText.setTextColor(TEXT)
+            statusText.text = "Klar · ingen godkendelse nødvendig"
         } else {
             statusPill.background = rounded(CARD, 14)
             statusDot.background = oval(MUTED)
@@ -489,7 +508,12 @@ class MainActivity : Activity() {
         }
 
         playIcon.setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
-        playCaption.text = if (running) "Tryk for at stoppe" else "Tryk for at starte"
+        playCaption.text = when {
+            running -> "Tryk for at stoppe"
+            AppState.standby -> "Tryk for at spille"
+            else -> "Tryk for at starte"
+        }
+        exitButton.visibility = if (running || AppState.standby) View.VISIBLE else View.GONE
         dialogLog?.text = AppState.logText()
 
         wifiCard.visibility = if (wifiConnected) View.GONE else View.VISIBLE
@@ -583,8 +607,40 @@ class MainActivity : Activity() {
             return
         }
         AppState.selected = selected
+        if (AppState.standby) {
+            // Godkendelsen er der allerede – spil med det samme uden Androids dialog.
+            startService(Intent(this, StreamService::class.java).setAction(StreamService.ACTION_PLAY))
+            return
+        }
         val mpm = getSystemService(MediaProjectionManager::class.java)
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+        // Android 14+: bed direkte om hele skærmen, så valget "En app" ikke vises. AirTooth bruger kun lyden.
+        val intent = if (Build.VERSION.SDK_INT >= 34) {
+            mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+        } else {
+            mpm.createScreenCaptureIntent()
+        }
+        startActivityForResult(intent, REQ_CAPTURE)
+    }
+
+    private fun exitApp() {
+        startService(Intent(this, StreamService::class.java).setAction(StreamService.ACTION_EXIT))
+    }
+
+    /**
+     * Mens AirTooth selv er åben, fanges lydknapperne her, før Android ser dem.
+     * Så ændres telefonens lyd slet ikke, og der kommer ingen lyd fra telefonen.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val setter = AppState.volumeSetter
+        val isVolumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (isVolumeKey && AppState.running && AppState.volumeKeysControlSpeakers && setter != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val step = if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) AppState.VOLUME_STEP else -AppState.VOLUME_STEP
+                setter(AppState.volumePercent + step)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

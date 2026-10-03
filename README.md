@@ -16,8 +16,11 @@ APK'en ligger under **Releases** (`AirTooth.apk`).
 ## Brug
 1. Installér `AirTooth.apk` på telefonen (tillad "Installér ukendte apps" for browseren/Mine filer).
 2. Åbn AirTooth, vælg højttalerne, tryk **Start**.
-3. Vælg **Hele skærmen** i Android-dialogen og tryk *Start*.
+3. Tryk *Start* i Android-dialogen (kun første gang).
 4. Gå til browseren og spil musik.
+
+**Stop** afbryder højttalerne, men AirTooth bliver *klar*, så næste Start spiller med det samme uden ny godkendelse.
+**Afslut** lukker helt og slipper godkendelsen.
 
 Kendte begrænsninger:
 - Ca. 2 sekunders forsinkelse fra play til lyd (som AirPlay på iPhone).

@@ -162,10 +162,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             record?.stop()
         } catch (_: Exception) {
         }
-        try {
-            projection.stop()
-        } catch (_: Exception) {
-        }
+        // Selve godkendelsen (projection) ejes af StreamService, så den kan genbruges ved næste Start.
         volumeExecutor.shutdown()
         val toClose = sessions.toList()
         sessions.clear()

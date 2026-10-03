@@ -47,6 +47,12 @@ object AppState {
     fun keepSelected(ids: Set<String>) {
         selected = selected.filter { it.id in ids }
     }
+    /** Så meget ét tryk på en lydknap ændrer højttalerne (procentpoint). */
+    const val VOLUME_STEP = 5
+
+    /** Stop er trykket, men godkendelsen holdes, så næste Start ikke viser Androids dialog. */
+    @Volatile var standby: Boolean = false
+
     /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
     @Volatile var volumePercent: Int = 60
 
