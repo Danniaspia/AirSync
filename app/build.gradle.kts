@@ -11,8 +11,8 @@ android {
         applicationId = "dk.airsync"
         minSdk = 29
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.2"
+        versionCode = 13
+        versionName = "1.3"
     }
 
     compileOptions {

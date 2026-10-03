@@ -33,6 +33,12 @@ object AppState {
     /** Højttalere, der er ved at forbinde til en afspilning i gang. */
     val connecting: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** Tag automatisk en højttaler tilbage, hvis en anden enhed (fx via Bluetooth) tager den. */
+    @Volatile var autoReclaim: Boolean = true
+
+    /** Højttalere, der er taget af en anden enhed, og som AirTooth er ved at tage tilbage. */
+    val reclaiming: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     @Synchronized
     fun addSelected(sp: Speaker) {
         if (selected.none { it.id == sp.id }) selected = selected + sp
