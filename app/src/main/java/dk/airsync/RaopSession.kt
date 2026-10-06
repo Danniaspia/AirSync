@@ -45,14 +45,6 @@ class RaopSession(
     private var lastKeepAlive = 0L
     @Volatile private var lastVolume = -1
 
-    /** Sat, når højttaleren har afbrudt os (fx fordi en anden enhed har taget den over). */
-    @Volatile var lost = false
-        private set
-
-    /** Hvornår forbindelsen blev oprettet (bruges, hvis højttaleren aldrig beder om tid). */
-    @Volatile var connectedAt = 0L
-        private set
-
     private fun log(msg: String) = AppState.log("${speaker.name}: $msg")
 
     fun connect(seq0: Int, rtp0: Long, volumePercent: Int): Boolean {
@@ -117,7 +109,6 @@ class RaopSession(
                 false
             }
             lastKeepAlive = System.currentTimeMillis()
-            connectedAt = lastKeepAlive
             log("forbundet ✓")
             true
         } catch (e: Exception) {
@@ -141,21 +132,14 @@ class RaopSession(
 
     /** Holder forbindelsen i live. Kaldes ca. hvert sekund. */
     fun keepAlive() {
-        if (lost) return
         val now = System.currentTimeMillis()
-        // Hvert 2. sekund, så vi hurtigt opdager, hvis en anden enhed har taget højttaleren.
-        if (now - lastKeepAlive < 2_000L) return
+        val interval = if (feedbackSupported) 2_000L else 15_000L
+        if (now - lastKeepAlive < interval) return
         lastKeepAlive = now
         try {
-            val r = if (feedbackSupported) request("POST", "/feedback") else request("OPTIONS", "*")
-            // 454/455: højttaleren kender ikke længere vores session – den er overtaget.
-            if (r.code == 454 || r.code == 455) {
-                log("sessionen er afsluttet af højttaleren (${r.code})")
-                lost = true
-            }
+            if (feedbackSupported) request("POST", "/feedback") else request("OPTIONS", "*")
         } catch (e: Exception) {
-            log("forbindelsen er afbrudt: ${e.message}")
-            lost = true
+            log("keep-alive fejlede: ${e.message}")
         }
     }
 

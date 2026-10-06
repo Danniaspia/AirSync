@@ -85,7 +85,6 @@ class MainActivity : Activity() {
             AppState.volumePercent = prefs.getInt("volume", AppState.volumePercent)
             AppState.volumeKeysControlSpeakers = prefs.getBoolean("keys", true)
             AppState.muteLocalSpeaker = prefs.getBoolean("mute", true)
-            AppState.autoReclaim = prefs.getBoolean("reclaim", true)
         }
         AppState.selected.forEach { checked.add(it.id) }
         prefs.getStringSet("selected", emptySet())?.let { checked.addAll(it) }
@@ -503,7 +502,6 @@ class MainActivity : Activity() {
         for (sp in speakers) {
             speakerSubtitles[sp.id]?.text = when {
                 running && sp.id in AppState.connecting -> "Forbinder…"
-                running && sp.id in AppState.reclaiming -> "Overtaget – tager tilbage…"
                 running && sp.id in playing -> "Spiller · ${sp.host}"
                 else -> sp.host
             }
@@ -558,11 +556,6 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean("mute", it).apply()
         })
         if (running) box.addView(text("Kan ændres, når der ikke afspilles.", 12f, MUTED))
-        // Kan ændres når som helst – også under afspilning.
-        box.addView(option("Tag højttalere tilbage, hvis en anden enhed overtager dem", AppState.autoReclaim) {
-            AppState.autoReclaim = it
-            prefs.edit().putBoolean("reclaim", it).apply()
-        }.apply { isEnabled = true })
 
         box.addView(topMargin(text("Diagnose", 13f, MUTED), 18))
         val log = text(AppState.logText(), 11f, MUTED).apply {

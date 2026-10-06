@@ -10,7 +10,6 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.security.SecureRandom
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,12 +38,6 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
         private const val CUSHION_BYTES = SAMPLE_RATE / 10 * 4
         private const val MAX_FILL_BYTES = SAMPLE_RATE / 2 * 4
         private const val MASK32 = 0xFFFFFFFFL
-
-        /** Så længe uden tidsforespørgsel, før en højttaler regnes for overtaget (de spørger ca. hvert 3. sek.). */
-        private const val TIMING_SILENCE_MS = 10_000L
-
-        /** Pause mellem forsøg på at tage en overtaget højttaler tilbage. */
-        private const val RECLAIM_DELAY_MS = 3_000L
     }
 
     @Volatile private var running = false
@@ -65,9 +58,6 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
     @Volatile private var nextPacket = 0L
     private val volumeExecutor = Executors.newSingleThreadExecutor()
     private val volumePending = AtomicBoolean(false)
-
-    /** Seneste tidsforespørgsel fra hver højttaler (IP → ms). Stilhed betyder, at den er taget af en anden. */
-    private val lastTiming = ConcurrentHashMap<String, Long>()
 
     /** Blokerer mens der forbindes. Kør på en baggrundstråd. */
     fun start(): Boolean {
@@ -100,7 +90,6 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             startCapture()
             thread(name = "sender", priority = Thread.MAX_PRIORITY) { senderLoop() }
             thread(name = "keepalive") { keepAliveLoop() }
-            thread(name = "monitor") { monitorLoop() }
             AppState.log("Streamer til ${sessions.size} højttaler(e). Lyden kommer ca. 2 sek. forsinket.")
             return true
         } catch (e: Exception) {
@@ -115,96 +104,31 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
      * som de andre fra den aktuelle position, så den spiller i takt med dem fra første tone.
      */
     fun addSpeaker(sp: Speaker): Boolean {
-        if (!running || !streaming || controlSocket == null || timingSocket == null) return false
+        val control = controlSocket
+        val timing = timingSocket
+        if (!running || !streaming || control == null || timing == null) return false
         if (sessions.any { it.speaker.id == sp.id } || !AppState.connecting.add(sp.id)) return true
         AppState.notifyChanged()
         thread(name = "add") {
-            if (connectLive(sp)) {
+            // Tabte pakker mellem dette punkt og forbindelsen gensendes fra historikken.
+            val n = nextPacket
+            val seq = ((seq0 + n) and 0xFFFF).toInt()
+            val ts = (rtp0 + n * FRAMES_PER_PACKET) and MASK32
+            val s = RaopSession(sp, control.localPort, timing.localPort)
+            val ok = s.connect(seq, ts, AppState.effectiveVolume(sp.id))
+            if (ok && running && AppState.selected.any { it.id == sp.id }) {
+                sessions.add(s)
+                val next = nextPacket
+                sendSync(dueTime(streamT0, next), (rtp0 + next * FRAMES_PER_PACKET) and MASK32, first = true, only = s)
                 AppState.log("${sp.name} spiller nu med")
             } else {
+                if (ok) s.close()
                 AppState.removeSelected(sp.id)
             }
             AppState.connecting.remove(sp.id)
             AppState.notifyChanged()
         }
         return true
-    }
-
-    /**
-     * Forbinder en højttaler til den kørende strøm fra den aktuelle position og giver den straks
-     * en sync-pakke. Blokerer; kør på en baggrundstråd. Returnerer true, hvis den nu spiller med.
-     */
-    private fun connectLive(sp: Speaker): Boolean {
-        val control = controlSocket ?: return false
-        val timing = timingSocket ?: return false
-        // Tabte pakker mellem dette punkt og forbindelsen gensendes fra historikken.
-        val n = nextPacket
-        val seq = ((seq0 + n) and 0xFFFF).toInt()
-        val ts = (rtp0 + n * FRAMES_PER_PACKET) and MASK32
-        val s = RaopSession(sp, control.localPort, timing.localPort)
-        val ok = s.connect(seq, ts, AppState.effectiveVolume(sp.id))
-        if (ok && running && AppState.selected.any { it.id == sp.id }) {
-            lastTiming.remove(s.address.hostAddress)
-            sessions.add(s)
-            val next = nextPacket
-            sendSync(dueTime(streamT0, next), (rtp0 + next * FRAMES_PER_PACKET) and MASK32, first = true, only = s)
-            return true
-        }
-        if (ok) s.close()
-        return false
-    }
-
-    /**
-     * Holder øje med, om en højttaler er blevet taget af en anden enhed (fx via Bluetooth):
-     * forbindelsen er lukket, eller højttaleren er holdt op med at synkronisere sit ur med os.
-     */
-    private fun monitorLoop() {
-        while (running) {
-            try {
-                Thread.sleep(1000)
-            } catch (_: InterruptedException) {
-                break
-            }
-            val now = System.currentTimeMillis()
-            for (s in sessions) {
-                // Tidstjekket bruges kun, hvis højttaleren har bedt om tid mindst én gang.
-                val heard = lastTiming[s.address.hostAddress]
-                val silent = heard != null && now - heard > TIMING_SILENCE_MS
-                if (s.lost || silent) onSpeakerLost(s)
-            }
-        }
-    }
-
-    private fun onSpeakerLost(s: RaopSession) {
-        if (!sessions.remove(s)) return
-        thread(name = "drop") { s.close() }
-        val sp = s.speaker
-        AppState.log("${sp.name} blev overtaget af en anden enhed")
-        if (!AppState.autoReclaim) {
-            AppState.removeSelected(sp.id)
-            AppState.notifyChanged()
-            return
-        }
-        if (!AppState.reclaiming.add(sp.id)) return
-        AppState.notifyChanged()
-        thread(name = "reclaim") {
-            var attempt = 0
-            while (running && AppState.autoReclaim && AppState.selected.any { it.id == sp.id }) {
-                try {
-                    Thread.sleep(RECLAIM_DELAY_MS)
-                } catch (_: InterruptedException) {
-                    break
-                }
-                attempt++
-                if (connectLive(sp)) {
-                    AppState.log("${sp.name} er taget tilbage")
-                    break
-                }
-                if (attempt % 10 == 0) AppState.log("${sp.name}: prøver stadig at tage den tilbage…")
-            }
-            AppState.reclaiming.remove(sp.id)
-            AppState.notifyChanged()
-        }
     }
 
     /** Fjerner en højttaler fra afspilningen. De andre spiller videre. */
@@ -432,7 +356,6 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             }
             if (dp.length < 32 || (buf[1].toInt() and 0x7F) != 0x52) continue
             val received = Clock.ntp(System.nanoTime())
-            dp.address?.hostAddress?.let { lastTiming[it] = System.currentTimeMillis() }
             val out = ByteArray(32)
             out[0] = 0x80.toByte()
             out[1] = 0xD3.toByte()
