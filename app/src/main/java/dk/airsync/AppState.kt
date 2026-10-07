@@ -1,5 +1,6 @@
 package dk.airsync
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -26,6 +27,11 @@ object AppState {
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     var listener: (() -> Unit)? = null
+
+    /** Appens Context, så widgetten kan opdateres, når tilstanden ændres. */
+    @Volatile var appContext: Context? = null
+
+    @Volatile private var widgetUpdatePending = false
 
     /** Højttalerne i afspilningen. Kan ændres, mens der spilles. */
     @Volatile var selected: List<Speaker> = emptyList()
@@ -93,5 +99,13 @@ object AppState {
 
     fun notifyChanged() {
         main.post { listener?.invoke() }
+        // Mange ændringer i træk (fx loglinjer) samles til én opdatering af widgetten.
+        if (!widgetUpdatePending) {
+            widgetUpdatePending = true
+            main.postDelayed({
+                widgetUpdatePending = false
+                appContext?.let { VolumeWidget.updateAll(it) }
+            }, 150)
+        }
     }
 }

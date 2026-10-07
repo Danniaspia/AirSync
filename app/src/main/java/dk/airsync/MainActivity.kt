@@ -81,6 +81,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppState.appContext = applicationContext
         if (!AppState.running) {
             AppState.volumePercent = prefs.getInt("volume", AppState.volumePercent)
             AppState.volumeKeysControlSpeakers = prefs.getBoolean("keys", true)
@@ -434,6 +435,7 @@ class MainActivity : Activity() {
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
             override fun onStopTrackingTouch(seekBar: SeekBar) {
                 prefs.edit().putInt(levelKey(sp.id), seekBar.progress).apply()
+                AppState.notifyChanged()
             }
         })
         levelRow.addView(bar, LinearLayout.LayoutParams(0, WRAP, 1f))
