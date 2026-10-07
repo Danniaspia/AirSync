@@ -56,11 +56,14 @@ object AppState {
     /** Så meget ét tryk på en lydknap ændrer højttalerne (procentpoint). */
     const val VOLUME_STEP = 5
 
+    /** Den samlede lydstyrke, hver afspilning starter med (procent). */
+    const val START_VOLUME = 20
+
     /** Stop er trykket, men godkendelsen holdes, så næste Start ikke viser Androids dialog. */
     @Volatile var standby: Boolean = false
 
     /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
-    @Volatile var volumePercent: Int = 60
+    @Volatile var volumePercent: Int = START_VOLUME
 
     /** Hver højttalers eget niveau (0–100 %) i forhold til den samlede lydstyrke. */
     val speakerLevels = ConcurrentHashMap<String, Int>()

@@ -83,7 +83,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         AppState.appContext = applicationContext
         if (!AppState.running) {
-            AppState.volumePercent = prefs.getInt("volume", AppState.volumePercent)
+            AppState.volumePercent = AppState.START_VOLUME
             AppState.volumeKeysControlSpeakers = prefs.getBoolean("keys", true)
             AppState.muteLocalSpeaker = prefs.getBoolean("mute", true)
         }
