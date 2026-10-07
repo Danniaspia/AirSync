@@ -160,7 +160,6 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         stopPhoneVolumeControl()
-        NowPlaying.stop()
         releaseLocks()
         AppState.running = false
         if (projection == null) {

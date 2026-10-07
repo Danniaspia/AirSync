@@ -113,7 +113,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         // Er adgangen lige givet i Indstillinger, begynder titlen at vises med det samme.
-        if (AppState.running) NowPlaying.start(applicationContext)
+        NowPlaying.start(applicationContext)
         refresh()
     }
 
