@@ -146,6 +146,7 @@ class StreamService : Service() {
         AppState.standby = false
         AppState.running = true
         startPhoneVolumeControl()
+        NowPlaying.start(applicationContext)
         updateNotification()
         thread(name = "start") {
             if (!s.start()) main.post { if (streamer === s) goStandby() }
@@ -159,6 +160,7 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         stopPhoneVolumeControl()
+        NowPlaying.stop()
         releaseLocks()
         AppState.running = false
         if (projection == null) {
@@ -179,6 +181,7 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         stopPhoneVolumeControl()
+        NowPlaying.stop()
         releaseLocks()
         val p = projection
         projection = null

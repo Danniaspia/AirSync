@@ -3,6 +3,7 @@ package dk.airsync
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -18,6 +19,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -62,6 +64,9 @@ class MainActivity : Activity() {
     private lateinit var statusPill: LinearLayout
     private lateinit var statusDot: View
     private lateinit var statusText: TextView
+    private lateinit var nowPlayingText: TextView
+    private lateinit var nowPlayingArtist: TextView
+    private lateinit var accessCard: LinearLayout
     private lateinit var volumeNumber: TextView
     private lateinit var volumeBar: SeekBar
     private lateinit var volumeHint: TextView
@@ -103,6 +108,26 @@ class MainActivity : Activity() {
         refresh()
         // Er WiFi slukket, kommer Androids WiFi-panel frem med det samme – kun én gang pr. åbning.
         if (savedInstanceState == null && !isWifiOn()) openWifiPanel()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Er adgangen lige givet i Indstillinger, begynder titlen at vises med det samme.
+        if (AppState.running) NowPlaying.start(applicationContext)
+        refresh()
+    }
+
+    /** Åbner Androids side for "Adgang til notifikationer" direkte på AirTooth, hvis muligt. */
+    private fun openNotificationAccess() {
+        val component = ComponentName(this, NowPlayingListener::class.java)
+        try {
+            startActivity(
+                Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                    .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, component.flattenToString())
+            )
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
     }
 
     override fun onPause() {
@@ -270,6 +295,46 @@ class MainActivity : Activity() {
         statusText = text("", 13f, MUTED)
         statusPill.addView(statusText)
         root.addView(statusPill, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(16) })
+
+        // Det, der spiller lige nu (fx YouTube i Brave)
+        nowPlayingText = text("", 17f, TEXT, bold = true).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        root.addView(topMargin(nowPlayingText, 12))
+        nowPlayingArtist = text("", 13f, MUTED).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        root.addView(topMargin(nowPlayingArtist, 2))
+
+        // Kort, der beder om adgang til at se titlen – vises kun, indtil adgangen er givet eller skjult
+        accessCard = card()
+        accessCard.addView(text("Vis hvad der spiller", 15f, TEXT, bold = true))
+        accessCard.addView(topMargin(text(
+            "AirTooth kan vise titlen på nummeret, hvis appen får \"Adgang til notifikationer\". " +
+                "Den bruges kun til at læse titlen.", 12f, MUTED
+        ), 4))
+        val accessButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        accessButtons.addView(text("Giv adgang", 14f, BG, bold = true).apply {
+            background = rounded(COPPER, 18)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            isClickable = true
+            setOnClickListener { openNotificationAccess() }
+        })
+        accessButtons.addView(text("Ikke nu", 14f, MUTED).apply {
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            isClickable = true
+            setOnClickListener {
+                prefs.edit().putBoolean("hide_now_playing_card", true).apply()
+                refresh()
+            }
+        })
+        accessCard.addView(topMargin(accessButtons, 10))
+        root.addView(topMargin(accessCard, 12))
 
         // WiFi-kort: vises kun, når telefonen ikke er på WiFi
         wifiCard = card()
@@ -486,6 +551,16 @@ class MainActivity : Activity() {
             statusText.setTextColor(MUTED)
             statusText.text = "Klar · vælg højttalere"
         }
+
+        // Nummeret, der spiller – kun under afspilning, og kun hvis vi kan se det
+        val title = if (running) AppState.nowTitle else null
+        nowPlayingText.text = title ?: ""
+        nowPlayingText.visibility = if (title != null) View.VISIBLE else View.GONE
+        val artist = if (title != null) AppState.nowArtist else null
+        nowPlayingArtist.text = artist ?: ""
+        nowPlayingArtist.visibility = if (artist != null) View.VISIBLE else View.GONE
+        val hideCard = prefs.getBoolean("hide_now_playing_card", false) || NowPlaying.hasAccess(this)
+        accessCard.visibility = if (hideCard) View.GONE else View.VISIBLE
 
         volumeNumber.text = AppState.volumePercent.toString()
         if (volumeBar.progress != AppState.volumePercent) volumeBar.progress = AppState.volumePercent

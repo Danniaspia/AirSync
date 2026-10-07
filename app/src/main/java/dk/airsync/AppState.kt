@@ -62,6 +62,17 @@ object AppState {
     /** Stop er trykket, men godkendelsen holdes, så næste Start ikke viser Androids dialog. */
     @Volatile var standby: Boolean = false
 
+    /** Titel og kunstner/kanal på det, der spiller lige nu (kræver "Adgang til notifikationer"). */
+    @Volatile var nowTitle: String? = null
+    @Volatile var nowArtist: String? = null
+
+    /** "Kunstner – Titel", kun titlen, eller null hvis intet kendes. */
+    fun nowPlayingLabel(): String? {
+        val title = nowTitle ?: return null
+        val artist = nowArtist
+        return if (artist != null && !title.contains(artist, ignoreCase = true)) "$artist – $title" else title
+    }
+
     /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
     @Volatile var volumePercent: Int = START_VOLUME
 
