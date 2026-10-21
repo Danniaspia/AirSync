@@ -73,6 +73,7 @@ class StreamService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppState.appContext = applicationContext
+        WifiBinder.start(applicationContext)
         when (intent?.action) {
             ACTION_STOP -> {
                 goStandby()

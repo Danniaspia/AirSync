@@ -87,6 +87,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppState.appContext = applicationContext
+        WifiBinder.start(applicationContext)
         if (!AppState.running) {
             AppState.volumePercent = AppState.START_VOLUME
             AppState.volumeKeysControlSpeakers = prefs.getBoolean("keys", true)
