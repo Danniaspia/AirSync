@@ -32,6 +32,12 @@ object AppState {
     @Volatile var appContext: Context? = null
 
     @Volatile private var widgetUpdatePending = false
+    @Volatile private var uiUpdatePending = false
+
+    private const val MAX_LOG_LINES = 150
+
+    /** Højttalere, der har mistet forbindelsen og er ved at blive forbundet igen. */
+    val reconnecting: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Højttalerne i afspilningen. Kan ændres, mens der spilles. */
     @Volatile var selected: List<Speaker> = emptyList()
@@ -104,7 +110,7 @@ object AppState {
         Log.i("AirTooth", msg)
         synchronized(lines) {
             lines.addLast("${timeFormat.format(Date())}  $msg")
-            while (lines.size > 300) lines.removeFirst()
+            while (lines.size > MAX_LOG_LINES) lines.removeFirst()
         }
         notifyChanged()
     }
@@ -112,7 +118,14 @@ object AppState {
     fun logText(): String = synchronized(lines) { lines.joinToString("\n") }
 
     fun notifyChanged() {
-        main.post { listener?.invoke() }
+        // Mange ændringer i træk samles til én opdatering af skærmen, så Diagnose ikke bliver langsom.
+        if (!uiUpdatePending) {
+            uiUpdatePending = true
+            main.postDelayed({
+                uiUpdatePending = false
+                listener?.invoke()
+            }, 100)
+        }
         // Mange ændringer i træk (fx loglinjer) samles til én opdatering af widgetten.
         if (!widgetUpdatePending) {
             widgetUpdatePending = true

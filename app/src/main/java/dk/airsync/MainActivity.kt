@@ -580,6 +580,7 @@ class MainActivity : Activity() {
         for (sp in speakers) {
             speakerSubtitles[sp.id]?.text = when {
                 running && sp.id in AppState.connecting -> "Forbinder…"
+                running && sp.id in AppState.reconnecting -> "Genforbinder…"
                 running && sp.id in playing -> "Spiller · ${sp.host}"
                 else -> sp.host
             }
