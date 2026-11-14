@@ -1,30 +1,60 @@
 package dk.airsync
 
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.NotificationListenerService
 
 /**
  * Kræves af Android for at måtte se andre apps' medieafspilning ("Adgang til notifikationer").
- * AirTooth bruger den kun til at læse titlen på det, der spiller – den læser ikke notifikationer.
+ * AirTooth bruger den kun til titlen på det, der spiller, og til at finde den afspiller, som
+ * medienotifikationen i panelet styrer. Indholdet af andre notifikationer læses ikke.
  *
  * Android forbinder lytteren, så snart adgangen er givet; så begynder vi at følge med med det samme.
  */
 class NowPlayingListener : NotificationListenerService() {
+    companion object {
+        @Volatile var instance: NowPlayingListener? = null
+            private set
+    }
+
     override fun onListenerConnected() {
+        instance = this
         AppState.appContext = applicationContext
         NowPlaying.start(applicationContext)
     }
 
     override fun onListenerDisconnected() {
+        instance = null
         requestRebind(ComponentName(this, NowPlayingListener::class.java))
+    }
+
+    /** Afspillerne bag de medienotifikationer, der vises i panelet lige nu. */
+    fun mediaNotificationControllers(): List<MediaController> {
+        val list = try {
+            activeNotifications
+        } catch (_: Exception) {
+            null
+        } ?: return emptyList()
+        return list.mapNotNull { sbn ->
+            val extras = sbn.notification.extras
+            val token = if (Build.VERSION.SDK_INT >= 33) {
+                extras.getParcelable(Notification.EXTRA_MEDIA_SESSION, MediaSession.Token::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                extras.getParcelable(Notification.EXTRA_MEDIA_SESSION) as? MediaSession.Token
+            }
+            token?.let { MediaController(applicationContext, it) }
+        }
     }
 }
 
@@ -96,7 +126,13 @@ object NowPlaying {
      * False, hvis vi ikke kan se nogen afspiller (fx uden "Adgang til notifikationer").
      */
     fun skipToNext(): Boolean {
-        val c = controller ?: return false
+        // Brug samme afspiller som medienotifikationen i panelet (den, hvor ⏭ virker). Brave kan have
+        // flere afspillere åbne, og den første på listen er ikke nødvendigvis den, der spiller.
+        val fromPanel = NowPlayingListener.instance?.mediaNotificationControllers().orEmpty()
+        val c = fromPanel.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: fromPanel.firstOrNull()
+            ?: controller
+            ?: return false
         val actions = c.playbackState?.actions ?: 0L
         val duration = c.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         when {
