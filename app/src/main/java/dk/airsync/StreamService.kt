@@ -17,9 +17,11 @@ import android.media.projection.MediaProjectionManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import kotlin.concurrent.thread
 
 /**
@@ -46,7 +48,7 @@ class StreamService : Service() {
         private const val VOLUME_POLL_MS = 100L
 
         // Når telefonens højttaler skal være tavs, tjekkes lydløs ofte, så et glimt bliver for kort til at høres.
-        private const val MUTE_GUARD_MS = 15L
+        private const val MUTE_GUARD_MS = 5L
 
         // Systemets (skjulte) broadcast, når en lydstyrke ændres.
         private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
@@ -58,13 +60,16 @@ class StreamService : Service() {
     private var projection: MediaProjection? = null
     private var streamer: Streamer? = null
     private var volumeReceiver: BroadcastReceiver? = null
-    private var baseVolume = 0
-    private var audioManager: AudioManager? = null
-    private var muteLocal = false
-    private var volumeKeys = false
+    // Bruges både af hovedtråden og af lydvagten på sin egen tråd.
+    @Volatile private var baseVolume = 0
+    @Volatile private var audioManager: AudioManager? = null
+    @Volatile private var muteLocal = false
+    @Volatile private var volumeKeys = false
     private var originalVolume = 0
     private var originalMuted = false
-    private var gotVolumeBroadcast = false
+    @Volatile private var gotVolumeBroadcast = false
+    private var volumeThread: HandlerThread? = null
+    @Volatile private var volumeHandler: Handler? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var exiting = false
@@ -252,15 +257,21 @@ class StreamService : Service() {
                 }
             }
         }
+        // Vagten kører på sin egen tråd med høj prioritet, så widget, titel og log på hovedtråden
+        // ikke kan forsinke den. Jo hurtigere lydløs slås til igen, jo kortere er glimtet fra telefonen.
+        val t = HandlerThread("AirTooth-lydvagt", Process.THREAD_PRIORITY_AUDIO).apply { start() }
+        val h = Handler(t.looper)
+        volumeThread = t
+        volumeHandler = h
         val filter = IntentFilter(VOLUME_CHANGED_ACTION)
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            registerReceiver(receiver, filter, null, h, Context.RECEIVER_EXPORTED)
         } else {
-            registerReceiver(receiver, filter)
+            registerReceiver(receiver, filter, null, h)
         }
         volumeReceiver = receiver
         // Ikke alle telefoner sender broadcasten pålideligt, så vi tjekker også selv jævnligt.
-        main.postDelayed(volumePoll, pollInterval())
+        h.postDelayed(volumePoll, pollInterval())
     }
 
     private fun pollInterval() = if (muteLocal) MUTE_GUARD_MS else VOLUME_POLL_MS
@@ -278,7 +289,7 @@ class StreamService : Service() {
             } else if (volumeKeys) {
                 handlePhoneIndex(am.getStreamVolume(AudioManager.STREAM_MUSIC))
             }
-            main.postDelayed(this, pollInterval())
+            volumeHandler?.postDelayed(this, pollInterval())
         }
     }
 
@@ -291,8 +302,11 @@ class StreamService : Service() {
         if (muteLocal) muteMusic()
         am.setStreamVolume(AudioManager.STREAM_MUSIC, baseVolume, 0)
         if (muteLocal) muteMusic()
-        applyVolume(AppState.volumePercent + steps * AppState.VOLUME_STEP)
-        AppState.log("Lydknap: højttalere ${AppState.volumePercent} %")
+        // Højttalernes lydstyrke ændres på hovedtråden; selve lydvagten skal ikke vente på det.
+        main.post {
+            applyVolume(AppState.volumePercent + steps * AppState.VOLUME_STEP)
+            AppState.log("Lydknap: højttalere ${AppState.volumePercent} %")
+        }
     }
 
     private fun muteMusic() {
@@ -301,7 +315,6 @@ class StreamService : Service() {
 
     /** Sætter telefonens medielyd tilbage, som den var før Start. */
     private fun stopPhoneVolumeControl() {
-        main.removeCallbacks(volumePoll)
         volumeReceiver?.let {
             try {
                 unregisterReceiver(it)
@@ -309,6 +322,10 @@ class StreamService : Service() {
             }
         }
         volumeReceiver = null
+        volumeHandler?.removeCallbacks(volumePoll)
+        volumeHandler = null
+        volumeThread?.quitSafely()
+        volumeThread = null
         AppState.volumeSetter = null
         val am = audioManager ?: return
         audioManager = null

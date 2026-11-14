@@ -89,6 +89,17 @@ object NowPlaying {
     }
 
     /** Stopper helt (ved Afslut). */
+    /**
+     * Beder den app, der spiller (fx Brave), direkte om at gå til næste nummer.
+     * False, hvis vi ikke kan se nogen afspiller (fx uden "Adgang til notifikationer").
+     */
+    fun skipToNext(): Boolean {
+        val c = controller ?: return false
+        c.transportControls.skipToNext()
+        AppState.log("Næste nummer sendt til ${c.packageName}")
+        return true
+    }
+
     fun stop() {
         main.post {
             manager?.removeOnActiveSessionsChangedListener(sessionsListener)

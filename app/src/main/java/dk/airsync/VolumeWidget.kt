@@ -152,10 +152,15 @@ class VolumeWidget : AppWidgetProvider() {
                 AppState.notifyChanged()
             }
             ACTION_NEXT -> {
-                // Samme som "næste" på et par hovedtelefoner: Android sender det til appen, der spiller.
-                val am = context.getSystemService(AudioManager::class.java)
-                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT))
-                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT))
+                // Først direkte til den app, der spiller (pålideligt). Ellers som "næste" på et par
+                // hovedtelefoner, hvor Android selv vælger appen.
+                if (!NowPlaying.skipToNext()) {
+                    val am = context.getSystemService(AudioManager::class.java)
+                    am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT))
+                    am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT))
+                    AppState.log("Næste nummer sendt som medieknap (ingen adgang til afspilleren)")
+                    NowPlaying.start(context)
+                }
                 return
             }
             ACTION_PLAY_STOP -> {
