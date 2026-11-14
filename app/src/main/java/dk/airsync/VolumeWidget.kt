@@ -55,17 +55,19 @@ class VolumeWidget : AppWidgetProvider() {
             v.setOnClickPendingIntent(R.id.header_area, open)
 
             // Under afspilning vises nummeret i stedet for "spiller", hvis vi kan se det.
-            val nowPlaying = if (running) AppState.nowPlayingLabel() else null
+            val problem = AppState.playbackProblem()
+            val nowPlaying = if (running && problem == null) AppState.nowPlayingLabel() else null
             v.setTextViewText(
                 R.id.status,
                 when {
+                    problem != null -> "· $problem"
                     nowPlaying != null -> "· $nowPlaying"
                     running -> "· spiller"
                     standby -> "· klar"
                     else -> "· slukket"
                 }
             )
-            v.setTextColor(R.id.status, if (nowPlaying != null) LIGHT else MUTED)
+            v.setTextColor(R.id.status, if (nowPlaying != null || problem != null) LIGHT else MUTED)
 
             // Spil/stop: uden godkendelse kan der kun startes fra appen, så knappen åbner den.
             v.setImageViewResource(R.id.btn_play, if (running) R.drawable.ic_stop else R.drawable.ic_play)

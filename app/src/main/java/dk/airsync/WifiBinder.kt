@@ -27,12 +27,19 @@ object WifiBinder {
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 if (cm.bindProcessToNetwork(network)) AppState.log("Netværk: AirTooth bruger WiFi")
+                if (AppState.wifiLost) {
+                    AppState.wifiLost = false
+                    AppState.notifyChanged()
+                }
             }
 
             override fun onLost(network: Network) {
                 if (cm.boundNetworkForProcess == network) {
                     cm.bindProcessToNetwork(null)
                     AppState.log("Netværk: WiFi er tabt")
+                    // Under afspilning genforbinder Streamer højttalerne selv, når WiFi er tilbage.
+                    AppState.wifiLost = true
+                    AppState.notifyChanged()
                 }
             }
         }

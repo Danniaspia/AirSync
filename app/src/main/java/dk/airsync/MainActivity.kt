@@ -535,7 +535,14 @@ class MainActivity : Activity() {
         val running = AppState.running
         val playing = AppState.selected.map { it.id }.toSet()
 
-        if (running) {
+        val problem = AppState.playbackProblem()
+        if (problem != null) {
+            // Der spilles, men lyden når ikke frem lige nu (fx WiFi tabt) – sig det tydeligt.
+            statusPill.background = rounded(CARD, 14)
+            statusDot.background = oval(MUTED)
+            statusText.setTextColor(TEXT)
+            statusText.text = problem
+        } else if (running) {
             statusPill.background = rounded(PILL_ON, 14)
             statusDot.background = oval(COPPER)
             statusText.setTextColor(PILL_ON_TEXT)

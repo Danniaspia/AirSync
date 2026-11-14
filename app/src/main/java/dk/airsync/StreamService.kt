@@ -68,12 +68,14 @@ class StreamService : Service() {
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var exiting = false
+    private var shownTitle: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppState.appContext = applicationContext
         WifiBinder.start(applicationContext)
+        AppState.serviceListener = { onStateChanged() }
         when (intent?.action) {
             ACTION_STOP -> {
                 goStandby()
@@ -176,6 +178,7 @@ class StreamService : Service() {
     private fun exit() {
         if (exiting) return
         exiting = true
+        AppState.serviceListener = null
         val s = streamer
         streamer = null
         AppState.streamer = null
@@ -361,7 +364,22 @@ class StreamService : Service() {
 
     private fun updateNotification() {
         if (exiting) return
+        shownTitle = notificationTitle()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun notificationTitle(): String {
+        val problem = AppState.playbackProblem()
+        return when {
+            streamer == null -> "AirTooth er klar"
+            problem != null -> "AirTooth · $problem"
+            else -> "AirTooth spiller"
+        }
+    }
+
+    /** Kaldes, når tilstanden ændres; opdaterer kun notifikationen, hvis teksten er ny. */
+    private fun onStateChanged() {
+        if (streamer != null && notificationTitle() != shownTitle) updateNotification()
     }
 
     private fun buildNotification(): Notification {
@@ -386,7 +404,7 @@ class StreamService : Service() {
             Icon.createWithResource(this, R.drawable.ic_stop), "Afslut", serviceIntent(ACTION_EXIT, 3)
         ).build()
         return Notification.Builder(this, CHANNEL)
-            .setContentTitle(if (playing) "AirTooth spiller" else "AirTooth er klar")
+            .setContentTitle(notificationTitle())
             .setContentText(
                 if (playing) AppState.selected.joinToString { it.name } else "Tryk Spil – ingen ny godkendelse"
             )

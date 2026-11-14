@@ -39,6 +39,23 @@ object AppState {
     /** Højttalere, der har mistet forbindelsen og er ved at blive forbundet igen. */
     val reconnecting: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** Telefonen har mistet WiFi; højttalerne kan ikke nås, før det er tilbage. */
+    @Volatile var wifiLost = false
+
+    /** Servicen lytter med, så notifikationen kan følge tilstanden. */
+    @Volatile var serviceListener: (() -> Unit)? = null
+
+    /**
+     * Tekst til appens statusfelt, widgetten og notifikationen, når der spilles, men noget er galt;
+     * null, når alt spiller normalt.
+     */
+    fun playbackProblem(): String? = when {
+        !running -> null
+        wifiLost -> "WiFi tabt · venter på WiFi"
+        reconnecting.isNotEmpty() -> "Genforbinder højttalere…"
+        else -> null
+    }
+
     /** Højttalerne i afspilningen. Kan ændres, mens der spilles. */
     @Volatile var selected: List<Speaker> = emptyList()
 
@@ -132,6 +149,7 @@ object AppState {
             main.postDelayed({
                 widgetUpdatePending = false
                 appContext?.let { VolumeWidget.updateAll(it) }
+                serviceListener?.invoke()
             }, 150)
         }
     }
