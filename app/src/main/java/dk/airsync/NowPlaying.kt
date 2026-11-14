@@ -88,17 +88,36 @@ object NowPlaying {
         }
     }
 
-    /** Stopper helt (ved Afslut). */
     /**
      * Beder den app, der spiller (fx Brave), direkte om at gå til næste nummer.
+     *
+     * YouTube i browseren tilbyder ofte ikke "næste" uden en playliste. Så spoler vi i stedet til
+     * lige før slutningen, og YouTube starter selv næste video via autoplay.
      * False, hvis vi ikke kan se nogen afspiller (fx uden "Adgang til notifikationer").
      */
     fun skipToNext(): Boolean {
         val c = controller ?: return false
-        c.transportControls.skipToNext()
-        AppState.log("Næste nummer sendt til ${c.packageName}")
+        val actions = c.playbackState?.actions ?: 0L
+        val duration = c.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
+        when {
+            actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L -> {
+                c.transportControls.skipToNext()
+                AppState.log("Næste nummer sendt til ${c.packageName}")
+            }
+            actions and PlaybackState.ACTION_SEEK_TO != 0L && duration > 3_000L -> {
+                c.transportControls.seekTo(duration - 1_000L)
+                AppState.log("Næste nummer: spoler til slutningen i ${c.packageName} (autoplay tager næste)")
+            }
+            else -> {
+                // Vi ved ikke, hvad appen understøtter – prøv "næste" alligevel.
+                c.transportControls.skipToNext()
+                AppState.log("Næste nummer sendt til ${c.packageName} (appen melder ikke, om den kan)")
+            }
+        }
         return true
     }
+
+    /** Stopper helt (ved Afslut). */
 
     fun stop() {
         main.post {
