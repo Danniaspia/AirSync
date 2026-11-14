@@ -43,6 +43,7 @@ class StreamService : Service() {
         const val EXTRA_DATA = "data"
         private const val CHANNEL = "stream"
         private const val NOTIFICATION_ID = 1
+        private const val AUTO_RESTART_INTERVAL_MS = 60_000L
         private const val VOLUME_POLL_MS = 100L
 
         // Når telefonens højttaler skal være tavs, tjekkes lydløs ofte, så et glimt bliver for kort til at høres.
@@ -69,6 +70,7 @@ class StreamService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var exiting = false
     private var shownTitle: String? = null
+    private var lastAutoRestart = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -142,9 +144,7 @@ class StreamService : Service() {
         acquireLocks()
         // Hver afspilning starter på samme rolige niveau; højttalernes egne niveauer bevares.
         AppState.volumePercent = AppState.START_VOLUME
-        val s = Streamer(p, AppState.selected)
-        streamer = s
-        AppState.streamer = s
+        val s = newStreamer(p)
         AppState.volumeSetter = { applyVolume(it) }
         AppState.standby = false
         AppState.running = true
@@ -152,6 +152,44 @@ class StreamService : Service() {
         NowPlaying.start(applicationContext)
         updateNotification()
         thread(name = "start") {
+            if (!s.start()) main.post { if (streamer === s) goStandby() }
+        }
+    }
+
+    private fun newStreamer(p: MediaProjection): Streamer {
+        val s = Streamer(p, AppState.selected)
+        s.onGiveUp = { main.post { restartStreamer() } }
+        streamer = s
+        AppState.streamer = s
+        return s
+    }
+
+    /**
+     * En højttaler kan ikke genforbindes: start afspilningen helt forfra (nye forbindelser og frisk
+     * WiFi-binding), som når man selv genstarter. Uden dialog, telefonens lyd forbliver slukket,
+     * og lydstyrken beholdes. Højst én gang i minuttet, så det ikke kan gå i ring.
+     */
+    private fun restartStreamer() {
+        val p = projection ?: return
+        val old = streamer ?: return
+        val now = System.currentTimeMillis()
+        val wait = AUTO_RESTART_INTERVAL_MS - (now - lastAutoRestart)
+        if (wait > 0) {
+            // For tæt på sidste genstart: vent resten af minuttet og prøv så igen.
+            AppState.log("Genstarter afspilningen om ${wait / 1000} sek.")
+            main.postDelayed({ if (streamer === old) restartStreamer() }, wait)
+            return
+        }
+        lastAutoRestart = now
+        AppState.log("Genstarter afspilningen automatisk…")
+        old.stop()
+        WifiBinder.restart(applicationContext)
+        val s = newStreamer(p)
+        AppState.notifyChanged()
+        thread(name = "restart") {
+            // Kort pause, så WiFi-bindingen og højttalerne kan nå at slippe de gamle forbindelser.
+            Thread.sleep(1_500)
+            if (streamer !== s) return@thread
             if (!s.start()) main.post { if (streamer === s) goStandby() }
         }
     }

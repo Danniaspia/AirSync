@@ -16,6 +16,20 @@ import android.net.NetworkRequest
 object WifiBinder {
     private var callback: ConnectivityManager.NetworkCallback? = null
 
+    /** Slipper den nuværende WiFi-binding og beder om WiFi på ny (bruges ved automatisk genstart). */
+    fun restart(context: Context) {
+        val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java)
+        callback?.let {
+            try {
+                cm.unregisterNetworkCallback(it)
+            } catch (_: Exception) {
+            }
+        }
+        callback = null
+        cm.bindProcessToNetwork(null)
+        start(context)
+    }
+
     fun start(context: Context) {
         if (callback != null) return
         val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java)

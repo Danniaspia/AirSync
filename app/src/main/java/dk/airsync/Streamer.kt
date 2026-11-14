@@ -41,9 +41,15 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
 
         /** Pause mellem forsøg på at genforbinde en højttaler, der har lukket forbindelsen. */
         private const val RECONNECT_DELAY_MS = 3_000L
+
+        /** Mislykkede genforbindelser, før hele afspilningen genstartes. */
+        private const val GIVE_UP_ATTEMPTS = 2
     }
 
     @Volatile private var running = false
+
+    /** Kaldes, når en højttaler ikke kan genforbindes; servicen genstarter så afspilningen. */
+    @Volatile var onGiveUp: (() -> Unit)? = null
     private val sessions = CopyOnWriteArrayList<RaopSession>()
     private val ring = PcmRing(SAMPLE_RATE * 4)
     private val history = arrayOfNulls<ByteArray>(HISTORY)
@@ -160,8 +166,15 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             var attempt = 0
             while (running && AppState.selected.any { it.id == sp.id }) {
                 attempt++
-                if (connectLive(sp, silent = true)) {
+                // Første forsøg logges med årsag, så vi kan se, hvorfor det fejler.
+                if (connectLive(sp, silent = attempt > 1)) {
                     AppState.log("${sp.name}: forbundet igen ✓")
+                    break
+                }
+                if (attempt == GIVE_UP_ATTEMPTS && onGiveUp != null) {
+                    // Det, der altid virker, er at starte helt forfra – det gør servicen nu selv.
+                    AppState.log("${sp.name}: genforbindelse lykkes ikke – genstarter afspilningen")
+                    onGiveUp?.invoke()
                     break
                 }
                 if (attempt % 10 == 0) AppState.log("${sp.name}: prøver stadig at genforbinde…")
