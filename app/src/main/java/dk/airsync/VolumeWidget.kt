@@ -6,6 +6,8 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.view.KeyEvent
 import android.view.View
 import android.widget.RemoteViews
 
@@ -21,6 +23,7 @@ class VolumeWidget : AppWidgetProvider() {
         private const val ACTION_SPEAKER_UP = "dk.airsync.widget.SPEAKER_UP"
         private const val ACTION_SPEAKER_DOWN = "dk.airsync.widget.SPEAKER_DOWN"
         private const val ACTION_PLAY_STOP = "dk.airsync.widget.PLAY_STOP"
+        private const val ACTION_NEXT = "dk.airsync.widget.NEXT"
         private const val EXTRA_ID = "speaker"
 
         private val ROWS = intArrayOf(R.id.row_s0, R.id.row_s1, R.id.row_s2, R.id.row_s3)
@@ -32,6 +35,7 @@ class VolumeWidget : AppWidgetProvider() {
 
         private val DARK = 0xFF111113.toInt()
         private val LIGHT = 0xFFF2EFEA.toInt()
+        private val MUTED = 0xFF8A8A90.toInt()
 
         /** Tegner alle AirTooth-widgets på startskærmen forfra ud fra den aktuelle tilstand. */
         fun updateAll(context: Context) {
@@ -50,14 +54,18 @@ class VolumeWidget : AppWidgetProvider() {
             )
             v.setOnClickPendingIntent(R.id.header_area, open)
 
+            // Under afspilning vises nummeret i stedet for "spiller", hvis vi kan se det.
+            val nowPlaying = if (running) AppState.nowPlayingLabel() else null
             v.setTextViewText(
                 R.id.status,
                 when {
+                    nowPlaying != null -> "· $nowPlaying"
                     running -> "· spiller"
                     standby -> "· klar"
                     else -> "· slukket"
                 }
             )
+            v.setTextColor(R.id.status, if (nowPlaying != null) LIGHT else MUTED)
 
             // Spil/stop: uden godkendelse kan der kun startes fra appen, så knappen åbner den.
             v.setImageViewResource(R.id.btn_play, if (running) R.drawable.ic_stop else R.drawable.ic_play)
@@ -65,6 +73,10 @@ class VolumeWidget : AppWidgetProvider() {
             v.setInt(R.id.btn_play, "setBackgroundResource", if (active) R.drawable.widget_button_accent else R.drawable.widget_button)
             v.setInt(R.id.btn_play, "setColorFilter", if (active) DARK else LIGHT)
             v.setOnClickPendingIntent(R.id.btn_play, if (active) broadcast(ctx, ACTION_PLAY_STOP, 1) else open)
+
+            // Næste nummer i den app, der spiller (fx YouTube i Brave) – kun synlig under afspilning.
+            v.setViewVisibility(R.id.btn_next, if (running) View.VISIBLE else View.GONE)
+            v.setOnClickPendingIntent(R.id.btn_next, broadcast(ctx, ACTION_NEXT, 4))
 
             if (!running) {
                 v.setViewVisibility(R.id.info, View.VISIBLE)
@@ -138,6 +150,13 @@ class VolumeWidget : AppWidgetProvider() {
                 AppState.streamer?.updateVolumes()
                 prefs.edit().putInt("level_$id", level).apply()
                 AppState.notifyChanged()
+            }
+            ACTION_NEXT -> {
+                // Samme som "næste" på et par hovedtelefoner: Android sender det til appen, der spiller.
+                val am = context.getSystemService(AudioManager::class.java)
+                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT))
+                am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT))
+                return
             }
             ACTION_PLAY_STOP -> {
                 val action = when {

@@ -56,11 +56,25 @@ object AppState {
     /** Så meget ét tryk på en lydknap ændrer højttalerne (procentpoint). */
     const val VOLUME_STEP = 5
 
+    /** Den samlede lydstyrke, hver afspilning starter med (procent). */
+    const val START_VOLUME = 20
+
     /** Stop er trykket, men godkendelsen holdes, så næste Start ikke viser Androids dialog. */
     @Volatile var standby: Boolean = false
 
+    /** Titel og kunstner/kanal på det, der spiller lige nu (kræver "Adgang til notifikationer"). */
+    @Volatile var nowTitle: String? = null
+    @Volatile var nowArtist: String? = null
+
+    /** "Kunstner – Titel", kun titlen, eller null hvis intet kendes. */
+    fun nowPlayingLabel(): String? {
+        val title = nowTitle ?: return null
+        val artist = nowArtist
+        return if (artist != null && !title.contains(artist, ignoreCase = true)) "$artist – $title" else title
+    }
+
     /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
-    @Volatile var volumePercent: Int = 60
+    @Volatile var volumePercent: Int = START_VOLUME
 
     /** Hver højttalers eget niveau (0–100 %) i forhold til den samlede lydstyrke. */
     val speakerLevels = ConcurrentHashMap<String, Int>()

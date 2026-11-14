@@ -137,6 +137,8 @@ class StreamService : Service() {
         val p = projection ?: return
         if (AppState.selected.isEmpty()) return
         acquireLocks()
+        // Hver afspilning starter på samme rolige niveau; højttalernes egne niveauer bevares.
+        AppState.volumePercent = AppState.START_VOLUME
         val s = Streamer(p, AppState.selected)
         streamer = s
         AppState.streamer = s
@@ -144,6 +146,7 @@ class StreamService : Service() {
         AppState.standby = false
         AppState.running = true
         startPhoneVolumeControl()
+        NowPlaying.start(applicationContext)
         updateNotification()
         thread(name = "start") {
             if (!s.start()) main.post { if (streamer === s) goStandby() }
@@ -177,6 +180,7 @@ class StreamService : Service() {
         AppState.streamer = null
         s?.stop()
         stopPhoneVolumeControl()
+        NowPlaying.stop()
         releaseLocks()
         val p = projection
         projection = null
