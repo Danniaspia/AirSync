@@ -7,7 +7,6 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.SocketTimeoutException
 import java.security.SecureRandom
 import java.util.Locale
 
@@ -20,9 +19,6 @@ class RaopSession(
     private class Response(val code: Int, val headers: Map<String, String>)
 
     companion object {
-        /** Keep-alive uden svar i træk, før forbindelsen regnes for død (ca. 30 sek.). */
-        private const val MAX_TIMEOUTS = 4
-
         // 0x01 = ukrypteret, efterfulgt af en 32-byte curve25519-nøgle (som pyatv bruger).
         private val AUTH_SETUP_BODY = Bytes.fromHex(
             "01 5902ede90d4ef2bd 4cb68a6330038207 a94dbd50d8aa465b 5d8c012a0c7e1d4e"
@@ -49,29 +45,9 @@ class RaopSession(
     private var lastKeepAlive = 0L
     @Volatile private var lastVolume = -1
 
-    /** Sat, når forbindelsen er helt lukket; Streamer genforbinder så højttaleren. */
-    @Volatile var broken = false
-        private set
-    private var timeouts = 0
+    private fun log(msg: String) = AppState.log("${speaker.name}: $msg")
 
-    /** Under genforbindelse skrives der ikke i loggen ved hvert forsøg. */
-    @Volatile private var quiet = false
-
-    private fun log(msg: String) {
-        if (!quiet) AppState.log("${speaker.name}: $msg")
-    }
-
-    /** [silent]: skriv ikke i loggen (bruges ved gentagne genforbindelsesforsøg). */
-    fun connect(seq0: Int, rtp0: Long, volumePercent: Int, silent: Boolean = false): Boolean {
-        quiet = silent
-        try {
-            return connectSteps(seq0, rtp0, volumePercent)
-        } finally {
-            quiet = false
-        }
-    }
-
-    private fun connectSteps(seq0: Int, rtp0: Long, volumePercent: Int): Boolean {
+    fun connect(seq0: Int, rtp0: Long, volumePercent: Int): Boolean {
         return try {
             address = InetAddress.getByName(speaker.host)
             log("forbinder til ${speaker.host}:${speaker.port} (et=${speaker.txt["et"]}, cn=${speaker.txt["cn"]})")
@@ -156,30 +132,15 @@ class RaopSession(
 
     /** Holder forbindelsen i live. Kaldes ca. hvert sekund. */
     fun keepAlive() {
-        if (broken) return
         val now = System.currentTimeMillis()
         val interval = if (feedbackSupported) 2_000L else 15_000L
         if (now - lastKeepAlive < interval) return
         lastKeepAlive = now
         try {
             if (feedbackSupported) request("POST", "/feedback") else request("OPTIONS", "*")
-            timeouts = 0
-        } catch (e: SocketTimeoutException) {
-            // Et enkelt langsomt svar er normalt over WiFi. Først når højttaleren slet ikke svarer
-            // i længere tid (ca. 30 sek.), regnes forbindelsen for død.
-            timeouts++
-            if (timeouts == 1) log("svarer langsomt (${e.message})")
-            if (timeouts >= MAX_TIMEOUTS) markBroken("svarer ikke")
         } catch (e: Exception) {
-            // Broken pipe, connection reset o.l.: højttaleren har lukket forbindelsen helt.
-            markBroken(e.message ?: e.javaClass.simpleName)
+            log("keep-alive fejlede: ${e.message}")
         }
-    }
-
-    private fun markBroken(reason: String) {
-        if (broken) return
-        broken = true
-        log("forbindelsen er lukket ($reason)")
     }
 
     fun close() {

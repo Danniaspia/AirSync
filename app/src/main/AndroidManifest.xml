@@ -3,7 +3,6 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -40,17 +39,6 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/volume_widget_info" />
         </receiver>
-
-        <!-- Kun til at se titlen på det, der spiller (Androids krav for andre apps' medieafspilning). -->
-        <service
-            android:name=".NowPlayingListener"
-            android:exported="true"
-            android:label="AirTooth – vis hvad der spiller"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
 
         <service
             android:name=".StreamService"

@@ -32,29 +32,6 @@ object AppState {
     @Volatile var appContext: Context? = null
 
     @Volatile private var widgetUpdatePending = false
-    @Volatile private var uiUpdatePending = false
-
-    private const val MAX_LOG_LINES = 150
-
-    /** Højttalere, der har mistet forbindelsen og er ved at blive forbundet igen. */
-    val reconnecting: MutableSet<String> = ConcurrentHashMap.newKeySet()
-
-    /** Telefonen har mistet WiFi; højttalerne kan ikke nås, før det er tilbage. */
-    @Volatile var wifiLost = false
-
-    /** Servicen lytter med, så notifikationen kan følge tilstanden. */
-    @Volatile var serviceListener: (() -> Unit)? = null
-
-    /**
-     * Tekst til appens statusfelt, widgetten og notifikationen, når der spilles, men noget er galt;
-     * null, når alt spiller normalt.
-     */
-    fun playbackProblem(): String? = when {
-        !running -> null
-        wifiLost -> "WiFi tabt · venter på WiFi"
-        reconnecting.isNotEmpty() -> "Genforbinder højttalere…"
-        else -> null
-    }
 
     /** Højttalerne i afspilningen. Kan ændres, mens der spilles. */
     @Volatile var selected: List<Speaker> = emptyList()
@@ -79,25 +56,11 @@ object AppState {
     /** Så meget ét tryk på en lydknap ændrer højttalerne (procentpoint). */
     const val VOLUME_STEP = 5
 
-    /** Den samlede lydstyrke, hver afspilning starter med (procent). */
-    const val START_VOLUME = 20
-
     /** Stop er trykket, men godkendelsen holdes, så næste Start ikke viser Androids dialog. */
     @Volatile var standby: Boolean = false
 
-    /** Titel og kunstner/kanal på det, der spiller lige nu (kræver "Adgang til notifikationer"). */
-    @Volatile var nowTitle: String? = null
-    @Volatile var nowArtist: String? = null
-
-    /** "Kunstner – Titel", kun titlen, eller null hvis intet kendes. */
-    fun nowPlayingLabel(): String? {
-        val title = nowTitle ?: return null
-        val artist = nowArtist
-        return if (artist != null && !title.contains(artist, ignoreCase = true)) "$artist – $title" else title
-    }
-
     /** Samlet lydstyrke (lydknapperne og hovedskyderen). */
-    @Volatile var volumePercent: Int = START_VOLUME
+    @Volatile var volumePercent: Int = 60
 
     /** Hver højttalers eget niveau (0–100 %) i forhold til den samlede lydstyrke. */
     val speakerLevels = ConcurrentHashMap<String, Int>()
@@ -127,7 +90,7 @@ object AppState {
         Log.i("AirTooth", msg)
         synchronized(lines) {
             lines.addLast("${timeFormat.format(Date())}  $msg")
-            while (lines.size > MAX_LOG_LINES) lines.removeFirst()
+            while (lines.size > 300) lines.removeFirst()
         }
         notifyChanged()
     }
@@ -135,21 +98,13 @@ object AppState {
     fun logText(): String = synchronized(lines) { lines.joinToString("\n") }
 
     fun notifyChanged() {
-        // Mange ændringer i træk samles til én opdatering af skærmen, så Diagnose ikke bliver langsom.
-        if (!uiUpdatePending) {
-            uiUpdatePending = true
-            main.postDelayed({
-                uiUpdatePending = false
-                listener?.invoke()
-            }, 100)
-        }
+        main.post { listener?.invoke() }
         // Mange ændringer i træk (fx loglinjer) samles til én opdatering af widgetten.
         if (!widgetUpdatePending) {
             widgetUpdatePending = true
             main.postDelayed({
                 widgetUpdatePending = false
                 appContext?.let { VolumeWidget.updateAll(it) }
-                serviceListener?.invoke()
             }, 150)
         }
     }

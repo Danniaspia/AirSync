@@ -38,18 +38,9 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
         private const val CUSHION_BYTES = SAMPLE_RATE / 10 * 4
         private const val MAX_FILL_BYTES = SAMPLE_RATE / 2 * 4
         private const val MASK32 = 0xFFFFFFFFL
-
-        /** Pause mellem forsøg på at genforbinde en højttaler, der har lukket forbindelsen. */
-        private const val RECONNECT_DELAY_MS = 3_000L
-
-        /** Mislykkede genforbindelser, før hele afspilningen genstartes. */
-        private const val GIVE_UP_ATTEMPTS = 2
     }
 
     @Volatile private var running = false
-
-    /** Kaldes, når en højttaler ikke kan genforbindes; servicen genstarter så afspilningen. */
-    @Volatile var onGiveUp: (() -> Unit)? = null
     private val sessions = CopyOnWriteArrayList<RaopSession>()
     private val ring = PcmRing(SAMPLE_RATE * 4)
     private val history = arrayOfNulls<ByteArray>(HISTORY)
@@ -113,80 +104,31 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
      * som de andre fra den aktuelle position, så den spiller i takt med dem fra første tone.
      */
     fun addSpeaker(sp: Speaker): Boolean {
-        if (!running || !streaming || controlSocket == null || timingSocket == null) return false
+        val control = controlSocket
+        val timing = timingSocket
+        if (!running || !streaming || control == null || timing == null) return false
         if (sessions.any { it.speaker.id == sp.id } || !AppState.connecting.add(sp.id)) return true
         AppState.notifyChanged()
         thread(name = "add") {
-            if (connectLive(sp, silent = false)) {
+            // Tabte pakker mellem dette punkt og forbindelsen gensendes fra historikken.
+            val n = nextPacket
+            val seq = ((seq0 + n) and 0xFFFF).toInt()
+            val ts = (rtp0 + n * FRAMES_PER_PACKET) and MASK32
+            val s = RaopSession(sp, control.localPort, timing.localPort)
+            val ok = s.connect(seq, ts, AppState.effectiveVolume(sp.id))
+            if (ok && running && AppState.selected.any { it.id == sp.id }) {
+                sessions.add(s)
+                val next = nextPacket
+                sendSync(dueTime(streamT0, next), (rtp0 + next * FRAMES_PER_PACKET) and MASK32, first = true, only = s)
                 AppState.log("${sp.name} spiller nu med")
             } else {
+                if (ok) s.close()
                 AppState.removeSelected(sp.id)
             }
             AppState.connecting.remove(sp.id)
             AppState.notifyChanged()
         }
         return true
-    }
-
-    /**
-     * Forbinder en højttaler til den kørende strøm fra den aktuelle position og giver den straks
-     * en sync-pakke. Blokerer; kør på en baggrundstråd. True, hvis den nu spiller med.
-     */
-    private fun connectLive(sp: Speaker, silent: Boolean): Boolean {
-        val control = controlSocket ?: return false
-        val timing = timingSocket ?: return false
-        // Tabte pakker mellem dette punkt og forbindelsen gensendes fra historikken.
-        val n = nextPacket
-        val seq = ((seq0 + n) and 0xFFFF).toInt()
-        val ts = (rtp0 + n * FRAMES_PER_PACKET) and MASK32
-        val s = RaopSession(sp, control.localPort, timing.localPort)
-        val ok = s.connect(seq, ts, AppState.effectiveVolume(sp.id), silent)
-        if (ok && running && AppState.selected.any { it.id == sp.id }) {
-            sessions.add(s)
-            val next = nextPacket
-            sendSync(dueTime(streamT0, next), (rtp0 + next * FRAMES_PER_PACKET) and MASK32, first = true, only = s)
-            return true
-        }
-        if (ok) s.close()
-        return false
-    }
-
-    /**
-     * Højttaleren har lukket forbindelsen helt (fx efter et hik i WiFi). Den fjernes og forbindes
-     * igen hvert 3. sekund, så længe den er valgt og der spilles. De andre spiller videre imens.
-     */
-    private fun reconnect(old: RaopSession) {
-        if (!sessions.remove(old)) return
-        thread(name = "drop") { old.close() }
-        val sp = old.speaker
-        if (!AppState.reconnecting.add(sp.id)) return
-        AppState.log("${sp.name}: genforbinder…")
-        AppState.notifyChanged()
-        thread(name = "reconnect") {
-            var attempt = 0
-            while (running && AppState.selected.any { it.id == sp.id }) {
-                attempt++
-                // Første forsøg logges med årsag, så vi kan se, hvorfor det fejler.
-                if (connectLive(sp, silent = attempt > 1)) {
-                    AppState.log("${sp.name}: forbundet igen ✓")
-                    break
-                }
-                if (attempt == GIVE_UP_ATTEMPTS && onGiveUp != null) {
-                    // Det, der altid virker, er at starte helt forfra – det gør servicen nu selv.
-                    AppState.log("${sp.name}: genforbindelse lykkes ikke – genstarter afspilningen")
-                    onGiveUp?.invoke()
-                    break
-                }
-                if (attempt % 10 == 0) AppState.log("${sp.name}: prøver stadig at genforbinde…")
-                try {
-                    Thread.sleep(RECONNECT_DELAY_MS)
-                } catch (_: InterruptedException) {
-                    break
-                }
-            }
-            AppState.reconnecting.remove(sp.id)
-            AppState.notifyChanged()
-        }
     }
 
     /** Fjerner en højttaler fra afspilningen. De andre spiller videre. */
@@ -436,11 +378,7 @@ class Streamer(private val projection: MediaProjection, private val speakers: Li
             } catch (_: InterruptedException) {
                 break
             }
-            for (s in sessions) {
-                if (!running) break
-                s.keepAlive()
-                if (s.broken) reconnect(s)
-            }
+            for (s in sessions) if (running) s.keepAlive()
         }
     }
 }

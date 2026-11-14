@@ -12,8 +12,8 @@ android {
         applicationId = "dk.airtooth"
         minSdk = 29
         targetSdk = 34
-        versionCode = 24
-        versionName = "1.23"
+        versionCode = 25
+        versionName = "1.5.1"
     }
 
     compileOptions {

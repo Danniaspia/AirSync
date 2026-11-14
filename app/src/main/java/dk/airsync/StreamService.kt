@@ -43,7 +43,6 @@ class StreamService : Service() {
         const val EXTRA_DATA = "data"
         private const val CHANNEL = "stream"
         private const val NOTIFICATION_ID = 1
-        private const val AUTO_RESTART_INTERVAL_MS = 60_000L
         private const val VOLUME_POLL_MS = 100L
 
         // Når telefonens højttaler skal være tavs, tjekkes lydløs ofte, så et glimt bliver for kort til at høres.
@@ -69,15 +68,11 @@ class StreamService : Service() {
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var exiting = false
-    private var shownTitle: String? = null
-    private var lastAutoRestart = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppState.appContext = applicationContext
-        WifiBinder.start(applicationContext)
-        AppState.serviceListener = { onStateChanged() }
         when (intent?.action) {
             ACTION_STOP -> {
                 goStandby()
@@ -142,54 +137,15 @@ class StreamService : Service() {
         val p = projection ?: return
         if (AppState.selected.isEmpty()) return
         acquireLocks()
-        // Hver afspilning starter på samme rolige niveau; højttalernes egne niveauer bevares.
-        AppState.volumePercent = AppState.START_VOLUME
-        val s = newStreamer(p)
+        val s = Streamer(p, AppState.selected)
+        streamer = s
+        AppState.streamer = s
         AppState.volumeSetter = { applyVolume(it) }
         AppState.standby = false
         AppState.running = true
         startPhoneVolumeControl()
-        NowPlaying.start(applicationContext)
         updateNotification()
         thread(name = "start") {
-            if (!s.start()) main.post { if (streamer === s) goStandby() }
-        }
-    }
-
-    private fun newStreamer(p: MediaProjection): Streamer {
-        val s = Streamer(p, AppState.selected)
-        s.onGiveUp = { main.post { restartStreamer() } }
-        streamer = s
-        AppState.streamer = s
-        return s
-    }
-
-    /**
-     * En højttaler kan ikke genforbindes: start afspilningen helt forfra (nye forbindelser og frisk
-     * WiFi-binding), som når man selv genstarter. Uden dialog, telefonens lyd forbliver slukket,
-     * og lydstyrken beholdes. Højst én gang i minuttet, så det ikke kan gå i ring.
-     */
-    private fun restartStreamer() {
-        val p = projection ?: return
-        val old = streamer ?: return
-        val now = System.currentTimeMillis()
-        val wait = AUTO_RESTART_INTERVAL_MS - (now - lastAutoRestart)
-        if (wait > 0) {
-            // For tæt på sidste genstart: vent resten af minuttet og prøv så igen.
-            AppState.log("Genstarter afspilningen om ${wait / 1000} sek.")
-            main.postDelayed({ if (streamer === old) restartStreamer() }, wait)
-            return
-        }
-        lastAutoRestart = now
-        AppState.log("Genstarter afspilningen automatisk…")
-        old.stop()
-        WifiBinder.restart(applicationContext)
-        val s = newStreamer(p)
-        AppState.notifyChanged()
-        thread(name = "restart") {
-            // Kort pause, så WiFi-bindingen og højttalerne kan nå at slippe de gamle forbindelser.
-            Thread.sleep(1_500)
-            if (streamer !== s) return@thread
             if (!s.start()) main.post { if (streamer === s) goStandby() }
         }
     }
@@ -216,13 +172,11 @@ class StreamService : Service() {
     private fun exit() {
         if (exiting) return
         exiting = true
-        AppState.serviceListener = null
         val s = streamer
         streamer = null
         AppState.streamer = null
         s?.stop()
         stopPhoneVolumeControl()
-        NowPlaying.stop()
         releaseLocks()
         val p = projection
         projection = null
@@ -402,22 +356,7 @@ class StreamService : Service() {
 
     private fun updateNotification() {
         if (exiting) return
-        shownTitle = notificationTitle()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
-    }
-
-    private fun notificationTitle(): String {
-        val problem = AppState.playbackProblem()
-        return when {
-            streamer == null -> "AirTooth er klar"
-            problem != null -> "AirTooth · $problem"
-            else -> "AirTooth spiller"
-        }
-    }
-
-    /** Kaldes, når tilstanden ændres; opdaterer kun notifikationen, hvis teksten er ny. */
-    private fun onStateChanged() {
-        if (streamer != null && notificationTitle() != shownTitle) updateNotification()
     }
 
     private fun buildNotification(): Notification {
@@ -442,7 +381,7 @@ class StreamService : Service() {
             Icon.createWithResource(this, R.drawable.ic_stop), "Afslut", serviceIntent(ACTION_EXIT, 3)
         ).build()
         return Notification.Builder(this, CHANNEL)
-            .setContentTitle(notificationTitle())
+            .setContentTitle(if (playing) "AirTooth spiller" else "AirTooth er klar")
             .setContentText(
                 if (playing) AppState.selected.joinToString { it.name } else "Tryk Spil – ingen ny godkendelse"
             )
